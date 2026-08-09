@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  rtmp-server:
+    build: .
+    image: rtmp-hls:latest
+    container_name: rtmp_hls_server
+    ports:
+      - "1935:1935" # Porta de transmissão RTMP
+      - "8080:8080" # Porta de visualização HTTP (HLS)
+    volumes:
+      - ./hls:/tmp/hls
+    restart: always

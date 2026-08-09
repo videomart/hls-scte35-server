@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transmissão ao Vivo</title>
+    
+    <!-- Estilos e Scripts do Video.js (Player Profissional) -->
+    <link href="https://vjs.zencdn.net/8.12.0/video-js.css" rel="stylesheet" />
+    <script src="https://vjs.zencdn.net/8.12.0/video.min.js"></script>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #141414;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        h1 {
+            margin-bottom: 20px;
+            font-size: 24px;
+            color: #E50914; /* Cor estilo streaming */
+        }
+        .video-container {
+            width: 100%;
+            max-width: 800px;
+            aspect-ratio: 16 / 9;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.7);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        /* Ajusta o player para ocupar todo o container */
+        .video-js {
+            width: 100% !important;
+            height: 100% !important;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>MINHA TRANSMISSÃO AO VIVO</h1>
+
+    <div class="video-container">
+        <!-- Player de Vídeo com autocorreção de fluxo ativo -->
+        <video 
+            id="meu-player" 
+            class="video-js vjs-default-skin vjs-big-play-centered" 
+            controls 
+            preload="auto"
+            muted
+            autoplay>
+            
+            <p class="vjs-no-js">
+                Para assistir a este vídeo, por favor ative o JavaScript ou mude para um navegador que suporte vídeo em HTML5.
+            </p>
+        </video>
+    </div>
+
+    <script>
+        // URL do stream montada dinamicamente, funciona em qualquer IP/porta
+        var streamUrl = window.location.protocol + '//' + window.location.host + '/hls/teste.m3u8';
+
+        var player = videojs('meu-player', {
+            autoplay: true,
+            muted: true,
+            controls: true,
+            fluid: true
+        });
+
+        player.src({
+            src: streamUrl,
+            type: 'application/x-mpegURL'
+        });
+    </script>
+
+</body>
+</html>
+

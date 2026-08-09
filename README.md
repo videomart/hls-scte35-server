@@ -11,7 +11,7 @@ Transmita com qualquer software de streaming (OBS Studio, ffmpeg) e assista pela
 
 ## Requisitos
 
-- Docker Engine + Docker Compose (ou Podman com compatibilidade com `docker compose`)
+- Docker Engine + Docker Compose
 
 ## Instalação do Docker Engine (em novos servidores)
 

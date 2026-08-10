@@ -7,7 +7,7 @@ services:
     container_name: rtmp_hls_server
     ports:
       - "1935:1935" # Porta de transmissão RTMP
-      - "8080:8080" # Porta de visualização HTTP (HLS)
+      - "8085:8085" # Porta de visualização HTTP (HLS)
     volumes:
       - ./hls:/tmp/hls
     restart: always

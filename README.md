@@ -7,7 +7,7 @@ Transmita com qualquer software de streaming (OBS Studio, ffmpeg) e assista pela
 ## Como funciona
 
 - **Porta 1935** — recebe o stream via RTMP (`rtmp://SEU_IP/live/CHAVE`).
-- **Porta 8080** — página web com o player HLS (`http://SEU_IP:8080/`).
+- **Porta 8085** — página web com o player HLS (`http://SEU_IP:8085/`).
 
 ## Requisitos
 
@@ -63,8 +63,8 @@ docker ps
 
 # 4. Abrir o firewall (se ativo) e conferir no navegador
 sudo ufw allow 1935/tcp
-sudo ufw allow 8080/tcp
-# Acesse http://SEU_IP:8080/
+sudo ufw allow 8085/tcp
+# Acesse http://SEU_IP:8085/
 ```
 
 Comandos úteis do serviço:
@@ -86,7 +86,7 @@ docker build -t rtmp-hls:latest .
 
 # Subir o container
 docker run -d --name rtmp_hls_server \
-  -p 1935:1935 -p 8080:8080 \
+  -p 1935:1935 -p 8085:8085 \
   -v "$(pwd)/hls:/tmp/hls" \
   --restart always \
   rtmp-hls:latest
@@ -100,7 +100,7 @@ docker run -d --name rtmp_hls_server \
    - **Chave de transmissão**: `teste`
 3. Inicie a transmissão.
 
-Depois acesse `http://SEU_IP:8080/` para assistir.
+Depois acesse `http://SEU_IP:8085/` para assistir.
 
 ### Com ffmpeg (exemplo)
 

@@ -5,4 +5,4 @@ COPY index.html /tmp/index.html
 
 RUN mkdir -p /tmp/hls
 
-EXPOSE 1935 8080
+EXPOSE 1935 8085

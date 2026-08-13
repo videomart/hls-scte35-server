@@ -123,8 +123,10 @@
 
     <script>
         var streamPath = new URLSearchParams(window.location.search).get('stream') || 'teste';
-        var hlsHost = new URLSearchParams(window.location.search).get('hlsHost') || window.location.hostname;
-        var streamUrl = 'http://' + hlsHost + ':8888/' + streamPath + '/index.m3u8';
+        // Proxiado pela mesma origem/porta da página (server.js /hls-live/*),
+        // em vez de apontar direto pro MediaMTX (porta interna, HTTP puro) --
+        // evita mixed content numa página HTTPS e não exige expor essa porta.
+        var streamUrl = '/hls-live/' + streamPath + '/index.m3u8';
 
         var player = videojs('meu-player', {
             autoplay: true,

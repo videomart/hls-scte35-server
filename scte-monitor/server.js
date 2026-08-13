@@ -15,6 +15,11 @@ const SRT_PASSPHRASE = process.env.SRT_PASSPHRASE || '';
 // Para onde o stream é retransmitido depois de monitorado (MediaMTX faz o remux pra HLS)
 const FORWARD_SRT_CALLER = process.env.FORWARD_SRT_CALLER || 'mediamtx:8891';
 const FORWARD_STREAMID = process.env.FORWARD_STREAMID || 'publish:teste';
+// Host:porta HTTP do MediaMTX (rede interna Docker) usado para proxiar o HLS
+// pela mesma origem da página -- evita mixed content (página HTTPS pedindo
+// recurso HTTP) e evita expor a porta do MediaMTX externamente.
+const MEDIAMTX_HLS_HOST = process.env.MEDIAMTX_HLS_HOST || 'mediamtx';
+const MEDIAMTX_HLS_PORT = process.env.MEDIAMTX_HLS_PORT || 8888;
 const LOG_FILE = process.env.LOG_FILE || path.join(__dirname, 'logs', 'scte-events.log');
 const HISTORY_FILE = process.env.HISTORY_FILE || path.join(__dirname, 'logs', 'scte-history.json');
 const MAX_HISTORY = 200;
@@ -137,6 +142,37 @@ function checkAuth(req, res) {
   return false;
 }
 
+const HLS_PROXY_PREFIX = '/hls-live/';
+
+function proxyHls(req, res) {
+  const targetPath = req.url.slice(HLS_PROXY_PREFIX.length - 1); // mantém a barra inicial
+  const proxyReq = http.request(
+    {
+      host: MEDIAMTX_HLS_HOST,
+      port: MEDIAMTX_HLS_PORT,
+      path: targetPath,
+      method: req.method,
+      headers: req.headers,
+    },
+    (proxyRes) => {
+      const headers = { ...proxyRes.headers };
+      // O MediaMTX responde redirects (ex: cookieCheck) com Location absoluto
+      // sem o prefixo do proxy -- sem isso o browser tenta acessar a origem
+      // errada (fora de /hls-live/) e recebe 404.
+      if (headers.location && headers.location.startsWith('/')) {
+        headers.location = HLS_PROXY_PREFIX.slice(0, -1) + headers.location;
+      }
+      res.writeHead(proxyRes.statusCode, headers);
+      proxyRes.pipe(res);
+    }
+  );
+  proxyReq.on('error', (err) => {
+    res.writeHead(502);
+    res.end('Erro ao contactar o servidor de vídeo: ' + err.message);
+  });
+  req.pipe(proxyReq);
+}
+
 function serveStatic(req, res) {
   let filePath = req.url === '/' ? '/index.html' : req.url;
   filePath = path.join(PUBLIC_DIR, path.normalize(filePath).replace(/^(\.\.[/\\])+/, ''));
@@ -172,6 +208,11 @@ const server = http.createServer((req, res) => {
   if (req.url === '/history') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
     res.end(JSON.stringify(history));
+    return;
+  }
+
+  if (req.url.startsWith(HLS_PROXY_PREFIX)) {
+    proxyHls(req, res);
     return;
   }
 

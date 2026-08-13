@@ -13,9 +13,9 @@ services:
       # já em uso por outros serviços neste servidor. Sem efeito em ambientes
       # sem essa infraestrutura (ex: dev local) -- só habilita o roteamento
       # se o proxy externo existir e estiver escutando essas env vars.
-      VIRTUAL_HOST: "streaming.tvtupi.com.br"
+      VIRTUAL_HOST: "rtmp.tvtupi.com.br"
       VIRTUAL_PORT: "8085"
-      LETSENCRYPT_HOST: "streaming.tvtupi.com.br"
+      LETSENCRYPT_HOST: "rtmp.tvtupi.com.br"
       LETSENCRYPT_EMAIL: "bolais@videomart.com.br"
     networks:
       - default
@@ -47,9 +47,18 @@ services:
       FORWARD_STREAMID: "publish:teste"
       BASIC_AUTH_USER: "${SCTE_WEB_USER}"
       BASIC_AUTH_PASS: "${SCTE_WEB_PASS}"
+      # HTTPS automático via nginx-proxy + acme-companion -- ver comentário
+      # equivalente no serviço rtmp-server.
+      VIRTUAL_HOST: "streaming.tvtupi.com.br"
+      VIRTUAL_PORT: "8095"
+      LETSENCRYPT_HOST: "streaming.tvtupi.com.br"
+      LETSENCRYPT_EMAIL: "bolais@videomart.com.br"
+    networks:
+      - default
+      - proxy
     ports:
       - "8890:8890/udp" # Ingest SRT (TVPlay -> aqui)
-      - "8095:8095"     # Página do monitor (player + tabela de cues)
+      - "8095:8095"     # Página do monitor (player + tabela de cues) -- acesso direto/local
     volumes:
       - ./scte-monitor/logs:/app/logs
     restart: always

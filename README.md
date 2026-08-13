@@ -8,14 +8,15 @@ Transmita com qualquer software de streaming (OBS Studio, ffmpeg) e assista pela
 
 - **Porta 1935** — recebe o stream via RTMP (`rtmp://SEU_IP/live/CHAVE`).
 - **Porta 8085** — página web com o player HLS (`http://SEU_IP:8085/`), também exposta
-  via HTTPS em `https://streaming.tvtupi.com.br/` (ver **HTTPS via domínio** abaixo).
+  via HTTPS em `https://rtmp.tvtupi.com.br/` (ver **HTTPS via domínio** abaixo).
   Sem transmissão ativa, o player tenta recarregar sozinho a cada 5s — não precisa F5.
 - **Porta 8890 (SRT)** — recebe transmissão SRT com SCTE-35 embutido (ex: TVPlay/SDK
   Medialooks). O serviço `scte-monitor` detecta os cues (cue-in/cue-out) em tempo real,
   loga cada evento e retransmite o stream para o `mediamtx`, que gera o HLS
   correspondente. Ver seção **SRT + monitor de cues SCTE-35** abaixo.
 - **Porta 8095** — página web com player + tabela de cues SCTE-35 recebidos em tempo
-  real (`http://SEU_IP:8095/`), protegida por HTTP Basic Auth.
+  real (`http://SEU_IP:8095/`), também exposta via HTTPS em
+  `https://streaming.tvtupi.com.br/`, protegida por HTTP Basic Auth.
 
 RTMP **não carrega SCTE-35** (limitação do protocolo, não deste servidor) — para
 receber cue points use sempre a porta SRT (8890), não a RTMP (1935).
@@ -128,20 +129,27 @@ ffmpeg -re -i seu_video.mp4 \
   pode ser trocada em `index.html` (campo `streamUrl`).
 - `index.html` — página do player; monta a URL do stream dinamicamente.
 
-## HTTPS via domínio (streaming.tvtupi.com.br)
+## HTTPS via domínio (rtmp.tvtupi.com.br / streaming.tvtupi.com.br)
 
-O player (`:8085`) é exposto via HTTPS em `https://streaming.tvtupi.com.br/`, sem
-precisar informar IP nem porta, usando o `nginx-proxy` + `acme-companion`
-(Let's Encrypt) que já roda neste servidor para outros serviços.
+Dois domínios, dois pipelines distintos, ambos via HTTPS sem IP/porta visíveis,
+usando o `nginx-proxy` + `acme-companion` (Let's Encrypt) que já roda neste servidor
+para outros serviços:
 
-Isso funciona automaticamente porque o serviço `rtmp-server` no `docker-compose.yml`
-declara `VIRTUAL_HOST`/`LETSENCRYPT_HOST=streaming.tvtupi.com.br` e se conecta à rede
-Docker externa do proxy (`PROXY_NETWORK` no `.env`, padrão `tvplay-web_default`) — o
-`nginx-proxy` detecta essas variáveis e roteia/emite certificado sozinho, sem
-configuração manual de nginx.
+- `https://rtmp.tvtupi.com.br/` → player RTMP legado (`rtmp-server`, `:8085`). Sem
+  SCTE-35 (limitação do protocolo RTMP).
+- `https://streaming.tvtupi.com.br/` → player + tabela de cues SCTE-35 em tempo real
+  (`scte-monitor`, `:8095`, recebe via SRT). Continua protegido por HTTP Basic Auth
+  mesmo atrás do domínio.
+
+Isso funciona automaticamente porque cada serviço no `docker-compose.yml` declara seu
+próprio par `VIRTUAL_HOST`/`LETSENCRYPT_HOST` e se conecta à rede Docker externa do
+proxy (`PROXY_NETWORK` no `.env`, padrão `tvplay-web_default`) — o `nginx-proxy`
+detecta essas variáveis e roteia/emite certificado sozinho, sem configuração manual
+de nginx.
 
 Pré-requisitos (já atendidos no servidor de produção atual):
-- Registro DNS (`A`) de `streaming.tvtupi.com.br` apontando para o IP do servidor.
+- Registros DNS (`A`) de `rtmp.tvtupi.com.br` e `streaming.tvtupi.com.br` apontando
+  para o IP do servidor.
 - `nginx-proxy` + `acme-companion` já rodando e escutando `:80`/`:443`.
 - A rede Docker externa referenciada em `PROXY_NETWORK` já existe (`docker network ls`).
 

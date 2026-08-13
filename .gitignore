@@ -1,4 +1,6 @@
 hls/
 node_modules/
-package.json
-package-lock.json
+.env
+
+# Runtime do scte-monitor (logs e histórico persistido) — não versionar
+scte-monitor/logs/

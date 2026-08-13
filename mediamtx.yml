@@ -1,0 +1,27 @@
+###############################################
+# MediaMTX config — recepção SRT com SCTE-35 (CUEI)
+# preservado no remux para HLS.
+
+# --- SRT (ingest) ---
+# O TVPlay transmite para o scte-monitor (porta 8890 na rede do host), que
+# detecta os cues SCTE-35 e retransmite o stream completo para cá, nesta
+# porta 8891, para o remux em HLS.
+srt: yes
+srtAddress: :8891
+
+# --- HLS (saída para validação/consumo) ---
+hls: yes
+hlsAddress: :8888
+hlsAlwaysRemux: yes
+hlsVariant: mpegts
+hlsSegmentCount: 7
+hlsSegmentDuration: 2s
+hlsAllowOrigins: ['*']
+
+# --- Desliga o que não estamos usando ---
+rtsp: no
+rtmp: no
+webrtc: no
+
+paths:
+  all_others:

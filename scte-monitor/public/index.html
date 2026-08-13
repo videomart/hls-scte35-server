@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transmissão SRT + Monitor SCTE-35</title>
+
+    <link href="https://vjs.zencdn.net/8.12.0/video-js.css" rel="stylesheet" />
+    <script src="https://vjs.zencdn.net/8.12.0/video.min.js"></script>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #141414;
+            color: white;
+            margin: 0;
+            padding: 24px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 24px;
+            justify-content: center;
+            align-items: flex-start;
+        }
+        h1 {
+            width: 100%;
+            text-align: center;
+            font-size: 22px;
+            color: #E50914;
+            margin: 0 0 8px 0;
+        }
+        .video-container {
+            width: 100%;
+            max-width: 720px;
+            aspect-ratio: 16 / 9;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.7);
+            border-radius: 8px;
+            overflow: hidden;
+            flex: 2 1 480px;
+        }
+        .video-js { width: 100% !important; height: 100% !important; }
+
+        .cue-panel {
+            flex: 1 1 320px;
+            max-width: 420px;
+            background: #1e1e1e;
+            border-radius: 8px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.7);
+            display: flex;
+            flex-direction: column;
+            max-height: 480px;
+        }
+        .cue-panel-header {
+            padding: 12px 16px;
+            border-bottom: 1px solid #333;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .cue-panel-header h2 { font-size: 16px; margin: 0; color: #ccc; }
+        .status-dot {
+            width: 10px; height: 10px; border-radius: 50%;
+            background: #555; display: inline-block; margin-right: 6px;
+        }
+        .status-dot.live { background: #2ecc71; box-shadow: 0 0 6px #2ecc71; }
+        .status-dot.down { background: #e74c3c; }
+
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        thead th {
+            position: sticky; top: 0; background: #262626;
+            text-align: left; padding: 8px 10px; color: #999;
+            font-weight: normal; border-bottom: 1px solid #333;
+        }
+        tbody { display: block; overflow-y: auto; max-height: 420px; }
+        thead, tbody tr { display: table; width: 100%; table-layout: fixed; }
+        tbody td { padding: 8px 10px; border-bottom: 1px solid #2a2a2a; }
+        tr.new-row { animation: flash 1.2s ease-out; }
+        @keyframes flash {
+            0% { background-color: rgba(46, 204, 113, 0.35); }
+            100% { background-color: transparent; }
+        }
+        .badge {
+            padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: bold;
+        }
+        .badge.out { background: #e74c3c33; color: #ff6b5e; }
+        .badge.in  { background: #2ecc7133; color: #4ee08a; }
+        .empty-row td { color: #666; text-align: center; padding: 24px; }
+    </style>
+</head>
+<body>
+    <h1>TRANSMISSÃO SRT — MONITOR SCTE-35</h1>
+
+    <div class="video-container">
+        <video
+            id="meu-player"
+            class="video-js vjs-default-skin vjs-big-play-centered"
+            controls
+            preload="auto"
+            muted
+            autoplay>
+            <p class="vjs-no-js">Ative o JavaScript para assistir.</p>
+        </video>
+    </div>
+
+    <div class="cue-panel">
+        <div class="cue-panel-header">
+            <h2><span id="statusDot" class="status-dot"></span>Cues recebidos</h2>
+            <span id="cueCount" style="color:#777; font-size:12px;">0</span>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th style="width:32%">Horário</th>
+                    <th style="width:18%">Tipo</th>
+                    <th style="width:20%">Event ID</th>
+                    <th style="width:30%">Progresso</th>
+                </tr>
+            </thead>
+            <tbody id="cueTableBody">
+                <tr class="empty-row"><td colspan="4">Aguardando cues...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        var streamPath = new URLSearchParams(window.location.search).get('stream') || 'teste';
+        var hlsHost = new URLSearchParams(window.location.search).get('hlsHost') || window.location.hostname;
+        var streamUrl = 'http://' + hlsHost + ':8888/' + streamPath + '/index.m3u8';
+
+        var player = videojs('meu-player', {
+            autoplay: true,
+            muted: true,
+            controls: true,
+            fluid: true
+        });
+        player.src({ src: streamUrl, type: 'application/x-mpegURL' });
+
+        var tbody = document.getElementById('cueTableBody');
+        var cueCountEl = document.getElementById('cueCount');
+        var statusDot = document.getElementById('statusDot');
+        var count = 0;
+
+        function fmtTime(iso) {
+            var d = new Date(iso);
+            return d.toLocaleTimeString('pt-BR', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+        }
+
+        function addRow(evt) {
+            if (tbody.querySelector('.empty-row')) tbody.innerHTML = '';
+            var tr = document.createElement('tr');
+            tr.className = 'new-row';
+            var typeLabel = evt.type === 'out' ? 'CUE-OUT' : 'CUE-IN';
+            var badgeClass = evt.type === 'out' ? 'out' : 'in';
+            tr.innerHTML =
+                '<td>' + fmtTime(evt.receivedAt) + '</td>' +
+                '<td><span class="badge ' + badgeClass + '">' + typeLabel + '</span></td>' +
+                '<td>' + evt.eventId + '</td>' +
+                '<td>' + (evt.progress || '') + '</td>';
+            tbody.insertBefore(tr, tbody.firstChild);
+            count++;
+            cueCountEl.textContent = count;
+        }
+
+        function connect() {
+            var es = new EventSource('/events');
+            es.onopen = function () {
+                statusDot.className = 'status-dot live';
+            };
+            es.onerror = function () {
+                statusDot.className = 'status-dot down';
+            };
+            es.onmessage = function (e) {
+                var data = JSON.parse(e.data);
+                if (data.type === 'hello') {
+                    count = 0;
+                    tbody.innerHTML = '';
+                    (data.history || []).forEach(function (evt) { addRow(evt); });
+                    if (!data.history || data.history.length === 0) {
+                        tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Aguardando cues...</td></tr>';
+                    }
+                    return;
+                }
+                addRow(data);
+            };
+        }
+        connect();
+    </script>
+</body>
+</html>

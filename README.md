@@ -8,6 +8,15 @@ Transmita com qualquer software de streaming (OBS Studio, ffmpeg) e assista pela
 
 - **Porta 1935** — recebe o stream via RTMP (`rtmp://SEU_IP/live/CHAVE`).
 - **Porta 8085** — página web com o player HLS (`http://SEU_IP:8085/`).
+- **Porta 8890 (SRT)** — recebe transmissão SRT com SCTE-35 embutido (ex: TVPlay/SDK
+  Medialooks). O serviço `scte-monitor` detecta os cues (cue-in/cue-out) em tempo real,
+  loga cada evento e retransmite o stream para o `mediamtx`, que gera o HLS
+  correspondente. Ver seção **SRT + monitor de cues SCTE-35** abaixo.
+- **Porta 8095** — página web com player + tabela de cues SCTE-35 recebidos em tempo
+  real (`http://SEU_IP:8095/`), protegida por HTTP Basic Auth.
+
+RTMP **não carrega SCTE-35** (limitação do protocolo, não deste servidor) — para
+receber cue points use sempre a porta SRT (8890), não a RTMP (1935).
 
 ## Requisitos
 
@@ -116,6 +125,41 @@ ffmpeg -re -i seu_video.mp4 \
 - `nginx.conf` — configuração do Nginx (RTMP + HLS). A chave de stream (`teste`)
   pode ser trocada em `index.html` (campo `streamUrl`).
 - `index.html` — página do player; monta a URL do stream dinamicamente.
+
+## SRT + monitor de cues SCTE-35
+
+Antes de subir, copie `.env.example` para `.env` e preencha:
+
+```bash
+cp .env.example .env
+# edite SCTE_SRT_PASSPHRASE, SCTE_WEB_USER, SCTE_WEB_PASS
+```
+
+- `SCTE_SRT_PASSPHRASE` — senha SRT (10-79 caracteres) exigida do lado de quem
+  transmite (TVPlay). Sem isso, qualquer um na rede pode publicar no streamid.
+- `SCTE_WEB_USER` / `SCTE_WEB_PASS` — credenciais HTTP Basic Auth da página do
+  monitor (`:8095`).
+
+Como transmitir (TVPlay ou qualquer encoder com saída SRT + embed SCTE-35):
+
+```
+srt://SEU_IP:8890?streamid=publish:teste&passphrase=SUA_PASSPHRASE
+```
+
+Acesse `http://SEU_IP:8095/` (login com `SCTE_WEB_USER`/`SCTE_WEB_PASS`) para ver o
+player e a tabela de cues recebidos em tempo real (mais recente no topo).
+
+Arquitetura interna: `scte-monitor` recebe o SRT, usa TSDuck (`tsp` +
+`splicemonitor`) para detectar os cues e retransmite o stream completo para o
+`mediamtx` (porta interna 8891), que faz o remux para HLS servido em `:8888`
+(consumido pela página do monitor, não exposto diretamente para uso externo).
+
+Logs e histórico de cues (persistem entre reinícios) ficam em `scte-monitor/logs/`.
+
+**Limitação atual:** suporta 1 transmissão por vez (streamid fixo `teste`). Para
+múltiplos clientes simultâneos, veja `scte-monitor/server.js` (`SRT_STREAMID`,
+`FORWARD_STREAMID`) — cada cliente precisaria de uma instância própria do serviço
+com portas/streamid distintos.
 
 ## Publicação no GitHub
 

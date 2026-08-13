@@ -7,7 +7,9 @@ Transmita com qualquer software de streaming (OBS Studio, ffmpeg) e assista pela
 ## Como funciona
 
 - **Porta 1935** — recebe o stream via RTMP (`rtmp://SEU_IP/live/CHAVE`).
-- **Porta 8085** — página web com o player HLS (`http://SEU_IP:8085/`).
+- **Porta 8085** — página web com o player HLS (`http://SEU_IP:8085/`), também exposta
+  via HTTPS em `https://streaming.tvtupi.com.br/` (ver **HTTPS via domínio** abaixo).
+  Sem transmissão ativa, o player tenta recarregar sozinho a cada 5s — não precisa F5.
 - **Porta 8890 (SRT)** — recebe transmissão SRT com SCTE-35 embutido (ex: TVPlay/SDK
   Medialooks). O serviço `scte-monitor` detecta os cues (cue-in/cue-out) em tempo real,
   loga cada evento e retransmite o stream para o `mediamtx`, que gera o HLS
@@ -125,6 +127,28 @@ ffmpeg -re -i seu_video.mp4 \
 - `nginx.conf` — configuração do Nginx (RTMP + HLS). A chave de stream (`teste`)
   pode ser trocada em `index.html` (campo `streamUrl`).
 - `index.html` — página do player; monta a URL do stream dinamicamente.
+
+## HTTPS via domínio (streaming.tvtupi.com.br)
+
+O player (`:8085`) é exposto via HTTPS em `https://streaming.tvtupi.com.br/`, sem
+precisar informar IP nem porta, usando o `nginx-proxy` + `acme-companion`
+(Let's Encrypt) que já roda neste servidor para outros serviços.
+
+Isso funciona automaticamente porque o serviço `rtmp-server` no `docker-compose.yml`
+declara `VIRTUAL_HOST`/`LETSENCRYPT_HOST=streaming.tvtupi.com.br` e se conecta à rede
+Docker externa do proxy (`PROXY_NETWORK` no `.env`, padrão `tvplay-web_default`) — o
+`nginx-proxy` detecta essas variáveis e roteia/emite certificado sozinho, sem
+configuração manual de nginx.
+
+Pré-requisitos (já atendidos no servidor de produção atual):
+- Registro DNS (`A`) de `streaming.tvtupi.com.br` apontando para o IP do servidor.
+- `nginx-proxy` + `acme-companion` já rodando e escutando `:80`/`:443`.
+- A rede Docker externa referenciada em `PROXY_NETWORK` já existe (`docker network ls`).
+
+Em um servidor **sem** essa infraestrutura (ex: ambiente novo, só este projeto), remova
+o bloco `networks: proxy` e as variáveis `VIRTUAL_HOST`/`LETSENCRYPT_*` do
+`docker-compose.yml` — o acesso local via `:8085` continua funcionando normalmente sem
+elas.
 
 ## SRT + monitor de cues SCTE-35
 

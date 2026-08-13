@@ -64,6 +64,7 @@
     <script>
         // URL do stream montada dinamicamente, funciona em qualquer IP/porta
         var streamUrl = window.location.protocol + '//' + window.location.host + '/hls/teste.m3u8';
+        var RETRY_INTERVAL_MS = 5000;
 
         var player = videojs('meu-player', {
             autoplay: true,
@@ -72,10 +73,21 @@
             fluid: true
         });
 
-        player.src({
-            src: streamUrl,
-            type: 'application/x-mpegURL'
+        function loadStream() {
+            player.src({
+                src: streamUrl,
+                type: 'application/x-mpegURL'
+            });
+        }
+
+        // Sem transmissão ativa: o .m3u8 não existe ainda (404) ou a rede
+        // falha. Em vez de exigir F5 do usuário, tenta recarregar a fonte
+        // sozinho a cada 5s até a transmissão aparecer.
+        player.on('error', function () {
+            setTimeout(loadStream, RETRY_INTERVAL_MS);
         });
+
+        loadStream();
     </script>
 
 </body>

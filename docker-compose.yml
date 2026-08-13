@@ -7,7 +7,19 @@ services:
     container_name: rtmp_hls_server
     ports:
       - "1935:1935" # Porta de transmissão RTMP
-      - "8085:8085" # Porta de visualização HTTP (HLS)
+      - "8085:8085" # Porta de visualização HTTP (HLS) -- acesso direto/local
+    environment:
+      # HTTPS automático via nginx-proxy + acme-companion (Let's Encrypt),
+      # já em uso por outros serviços neste servidor. Sem efeito em ambientes
+      # sem essa infraestrutura (ex: dev local) -- só habilita o roteamento
+      # se o proxy externo existir e estiver escutando essas env vars.
+      VIRTUAL_HOST: "streaming.tvtupi.com.br"
+      VIRTUAL_PORT: "8085"
+      LETSENCRYPT_HOST: "streaming.tvtupi.com.br"
+      LETSENCRYPT_EMAIL: "bolais@videomart.com.br"
+    networks:
+      - default
+      - proxy
     volumes:
       - ./hls:/tmp/hls
     restart: always
@@ -41,3 +53,13 @@ services:
     volumes:
       - ./scte-monitor/logs:/app/logs
     restart: always
+
+networks:
+  default: {}
+  proxy:
+    # Rede externa do nginx-proxy (jwilder/nginx-proxy + acme-companion),
+    # compartilhada com outros serviços deste servidor. Precisa existir
+    # previamente (docker network ls); em ambientes sem essa infra, remova
+    # este bloco e a referência a "proxy" acima.
+    external: true
+    name: "${PROXY_NETWORK:-tvplay-web_default}"

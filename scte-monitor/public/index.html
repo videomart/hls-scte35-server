@@ -30,12 +30,12 @@
         }
         .video-container {
             width: 100%;
-            max-width: 720px;
+            max-width: 1440px;
             aspect-ratio: 16 / 9;
             box-shadow: 0 10px 30px rgba(0,0,0,0.7);
             border-radius: 8px;
             overflow: hidden;
-            flex: 2 1 480px;
+            flex: 2 1 960px;
         }
         .video-js { width: 100% !important; height: 100% !important; }
 
@@ -49,6 +49,27 @@
             flex-direction: column;
             max-height: 480px;
         }
+
+        .last-cue {
+            width: 100%;
+            max-width: 420px;
+            background: #1e1e1e;
+            border-radius: 8px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.7);
+            padding: 16px;
+            border: 1px solid #333;
+        }
+        .last-cue-label {
+            font-size: 12px; color: #999; text-transform: uppercase;
+            letter-spacing: 0.05em; margin-bottom: 8px;
+        }
+        .last-cue-body {
+            display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+        }
+        .last-cue .badge { font-size: 16px; padding: 4px 12px; }
+        .last-cue-time { font-size: 14px; color: #ccc; }
+        .last-cue-meta { font-size: 12px; color: #777; width: 100%; margin-top: 4px; }
+        .last-cue.empty .last-cue-body { color: #666; font-size: 14px; }
         .cue-panel-header {
             padding: 12px 16px;
             border-bottom: 1px solid #333;
@@ -84,6 +105,16 @@
         .badge.out { background: #e74c3c33; color: #ff6b5e; }
         .badge.in  { background: #2ecc7133; color: #4ee08a; }
         .empty-row td { color: #666; text-align: center; padding: 24px; }
+
+        footer {
+            width: 100%;
+            text-align: center;
+            padding: 20px 12px 4px;
+            color: #666;
+            font-size: 12px;
+            border-top: 1px solid #262626;
+            margin-top: 8px;
+        }
     </style>
 </head>
 <body>
@@ -101,25 +132,36 @@
         </video>
     </div>
 
-    <div class="cue-panel">
-        <div class="cue-panel-header">
-            <h2><span id="statusDot" class="status-dot"></span>Cues recebidos</h2>
-            <span id="cueCount" style="color:#777; font-size:12px;">0</span>
+    <div style="flex: 1 1 320px; max-width: 420px; display: flex; flex-direction: column; gap: 16px;">
+        <div class="last-cue empty" id="lastCue">
+            <div class="last-cue-label">Último cue recebido</div>
+            <div class="last-cue-body" id="lastCueBody">Aguardando cues...</div>
         </div>
-        <table>
-            <thead>
-                <tr>
-                    <th style="width:32%">Horário</th>
-                    <th style="width:18%">Tipo</th>
-                    <th style="width:20%">Event ID</th>
-                    <th style="width:30%">Progresso</th>
-                </tr>
-            </thead>
-            <tbody id="cueTableBody">
-                <tr class="empty-row"><td colspan="4">Aguardando cues...</td></tr>
-            </tbody>
-        </table>
+
+        <div class="cue-panel">
+            <div class="cue-panel-header">
+                <h2><span id="statusDot" class="status-dot"></span>Cues recebidos</h2>
+                <span id="cueCount" style="color:#777; font-size:12px;">0</span>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:32%">Horário</th>
+                        <th style="width:18%">Tipo</th>
+                        <th style="width:20%">Event ID</th>
+                        <th style="width:30%">Progresso</th>
+                    </tr>
+                </thead>
+                <tbody id="cueTableBody">
+                    <tr class="empty-row"><td colspan="4">Aguardando cues...</td></tr>
+                </tbody>
+            </table>
+        </div>
     </div>
+
+    <footer>
+        Este é um sistema de testes para monitoração de SCTE-35, exclusivo e dedicado aos clientes Videomart TVPLAY.
+    </footer>
 
     <script>
         var streamPath = new URLSearchParams(window.location.search).get('stream') || 'teste';
@@ -139,6 +181,8 @@
         var tbody = document.getElementById('cueTableBody');
         var cueCountEl = document.getElementById('cueCount');
         var statusDot = document.getElementById('statusDot');
+        var lastCueEl = document.getElementById('lastCue');
+        var lastCueBodyEl = document.getElementById('lastCueBody');
         var count = 0;
 
         function fmtTime(iso) {
@@ -146,20 +190,58 @@
             return d.toLocaleTimeString('pt-BR', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
         }
 
+        function rowHtml(evt) {
+            var typeLabel = evt.type === 'out' ? 'CUE-OUT' : 'CUE-IN';
+            var badgeClass = evt.type === 'out' ? 'out' : 'in';
+            return '<td>' + fmtTime(evt.receivedAt) + '</td>' +
+                '<td><span class="badge ' + badgeClass + '">' + typeLabel + '</span></td>' +
+                '<td>' + evt.eventId + '</td>' +
+                '<td>' + (evt.progress || '') + '</td>';
+        }
+
+        function updateLastCue(evt) {
+            var typeLabel = evt.type === 'out' ? 'CUE-OUT' : 'CUE-IN';
+            var badgeClass = evt.type === 'out' ? 'out' : 'in';
+            lastCueEl.classList.remove('empty');
+            lastCueBodyEl.innerHTML =
+                '<span class="badge ' + badgeClass + '">' + typeLabel + '</span>' +
+                '<span class="last-cue-time">' + fmtTime(evt.receivedAt) + '</span>' +
+                '<span class="last-cue-meta">Event ID ' + evt.eventId +
+                (evt.progress ? ' · ' + evt.progress : '') + '</span>';
+        }
+
+        // Renderiza o histórico inicial de uma vez (DocumentFragment) em vez de
+        // uma inserção por linha -- evita reflow repetido quando o histórico
+        // tem muitos itens.
+        function renderHistory(history) {
+            tbody.innerHTML = '';
+            count = 0;
+            if (!history || history.length === 0) {
+                tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Aguardando cues...</td></tr>';
+                cueCountEl.textContent = '0';
+                return;
+            }
+            var fragment = document.createDocumentFragment();
+            history.forEach(function (evt) {
+                var tr = document.createElement('tr');
+                tr.innerHTML = rowHtml(evt);
+                fragment.appendChild(tr);
+                count++;
+            });
+            tbody.appendChild(fragment);
+            cueCountEl.textContent = String(count);
+            updateLastCue(history[0]);
+        }
+
         function addRow(evt) {
             if (tbody.querySelector('.empty-row')) tbody.innerHTML = '';
             var tr = document.createElement('tr');
             tr.className = 'new-row';
-            var typeLabel = evt.type === 'out' ? 'CUE-OUT' : 'CUE-IN';
-            var badgeClass = evt.type === 'out' ? 'out' : 'in';
-            tr.innerHTML =
-                '<td>' + fmtTime(evt.receivedAt) + '</td>' +
-                '<td><span class="badge ' + badgeClass + '">' + typeLabel + '</span></td>' +
-                '<td>' + evt.eventId + '</td>' +
-                '<td>' + (evt.progress || '') + '</td>';
+            tr.innerHTML = rowHtml(evt);
             tbody.insertBefore(tr, tbody.firstChild);
             count++;
-            cueCountEl.textContent = count;
+            cueCountEl.textContent = String(count);
+            updateLastCue(evt);
         }
 
         function connect() {
@@ -173,12 +255,7 @@
             es.onmessage = function (e) {
                 var data = JSON.parse(e.data);
                 if (data.type === 'hello') {
-                    count = 0;
-                    tbody.innerHTML = '';
-                    (data.history || []).forEach(function (evt) { addRow(evt); });
-                    if (!data.history || data.history.length === 0) {
-                        tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Aguardando cues...</td></tr>';
-                    }
+                    renderHistory(data.history);
                     return;
                 }
                 addRow(data);

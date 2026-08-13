@@ -22,7 +22,10 @@ const MEDIAMTX_HLS_HOST = process.env.MEDIAMTX_HLS_HOST || 'mediamtx';
 const MEDIAMTX_HLS_PORT = process.env.MEDIAMTX_HLS_PORT || 8888;
 const LOG_FILE = process.env.LOG_FILE || path.join(__dirname, 'logs', 'scte-events.log');
 const HISTORY_FILE = process.env.HISTORY_FILE || path.join(__dirname, 'logs', 'scte-history.json');
-const MAX_HISTORY = 200;
+const MAX_HISTORY = 100;
+// Evita que scte-events.log cresça sem limite: quando passar disso, mantém só
+// a metade mais recente (checado a cada gravação, custo desprezível).
+const MAX_LOG_BYTES = 2 * 1024 * 1024; // 2MB
 
 // HTTP Basic Auth da página do monitor -- obrigatório em produção.
 const BASIC_AUTH_USER = process.env.BASIC_AUTH_USER || '';
@@ -38,10 +41,31 @@ const sseClients = new Set();
 
 fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
 
+let logSizeCheckCounter = 0;
+
+function rotateLogIfNeeded() {
+  fs.stat(LOG_FILE, (err, stats) => {
+    if (err || stats.size < MAX_LOG_BYTES) return;
+    fs.readFile(LOG_FILE, 'utf8', (readErr, content) => {
+      if (readErr) return;
+      const lines = content.split('\n').filter(Boolean);
+      const kept = lines.slice(-Math.floor(lines.length / 2));
+      fs.writeFile(LOG_FILE, kept.join('\n') + '\n', (writeErr) => {
+        if (writeErr) console.error('Falha ao rotacionar log:', writeErr.message);
+      });
+    });
+  });
+}
+
 function appendLog(line) {
   fs.appendFile(LOG_FILE, line + '\n', (err) => {
     if (err) console.error('Falha ao gravar log:', err.message);
   });
+  // Checar o tamanho do arquivo a cada gravação seria um stat() extra por
+  // evento; amostra 1 a cada 20 gravações -- suficiente para nunca deixar
+  // passar muito do limite, sem custo por evento.
+  logSizeCheckCounter++;
+  if (logSizeCheckCounter % 20 === 0) rotateLogIfNeeded();
 }
 
 function persistHistory() {

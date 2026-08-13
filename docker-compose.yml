@@ -44,7 +44,7 @@ services:
       SRT_LISTEN: "0.0.0.0:8890"
       SRT_PASSPHRASE: "${SCTE_SRT_PASSPHRASE}"
       FORWARD_SRT_CALLER: "mediamtx:8891"
-      FORWARD_STREAMID: "publish:teste"
+      FORWARD_STREAMID: "publish:videomart"
       BASIC_AUTH_USER: "${SCTE_WEB_USER}"
       BASIC_AUTH_PASS: "${SCTE_WEB_PASS}"
       # HTTPS automático via nginx-proxy + acme-companion -- ver comentário

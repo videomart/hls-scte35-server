@@ -9,24 +9,35 @@
     <script src="https://vjs.zencdn.net/8.12.0/video.min.js"></script>
 
     <style>
+        html, body {
+            height: 100%;
+        }
         body {
             font-family: Arial, sans-serif;
             background-color: #141414;
             color: white;
             margin: 0;
-            padding: 24px;
+            padding: 16px 24px 8px;
             display: flex;
-            flex-wrap: wrap;
-            gap: 24px;
-            justify-content: center;
-            align-items: flex-start;
+            flex-direction: column;
+            box-sizing: border-box;
         }
         h1 {
             width: 100%;
             text-align: center;
             font-size: 22px;
-            color: #E50914;
-            margin: 0 0 8px 0;
+            color: #ffffff;
+            margin: 0 0 12px 0;
+            flex: 0 0 auto;
+        }
+        .main-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: stretch;
+            gap: 24px;
+            justify-content: center;
+            flex: 1 1 auto;
+            min-height: 0;
         }
         .video-container {
             width: 100%;
@@ -39,25 +50,36 @@
         }
         .video-js { width: 100% !important; height: 100% !important; }
 
-        .cue-panel {
+        .side-col {
             flex: 1 1 320px;
             max-width: 420px;
+            width: 420px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            min-height: 0;
+        }
+
+        .cue-panel {
+            width: 100%;
             background: #1e1e1e;
             border-radius: 8px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.7);
             display: flex;
             flex-direction: column;
-            max-height: 480px;
+            flex: 1 1 auto;
+            min-height: 0;
         }
 
         .last-cue {
             width: 100%;
-            max-width: 420px;
+            box-sizing: border-box;
             background: #1e1e1e;
             border-radius: 8px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.7);
             padding: 16px;
             border: 1px solid #333;
+            flex: 0 0 auto;
         }
         .last-cue-label {
             font-size: 12px; color: #999; text-transform: uppercase;
@@ -85,14 +107,15 @@
         .status-dot.live { background: #2ecc71; box-shadow: 0 0 6px #2ecc71; }
         .status-dot.down { background: #e74c3c; }
 
-        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+        thead { flex: 0 0 auto; }
         thead th {
-            position: sticky; top: 0; background: #262626;
+            background: #262626;
             text-align: left; padding: 8px 10px; color: #999;
             font-weight: normal; border-bottom: 1px solid #333;
         }
-        tbody { display: block; overflow-y: auto; max-height: 420px; }
-        thead, tbody tr { display: table; width: 100%; table-layout: fixed; }
+        tbody { display: block; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+        thead tr, tbody tr { display: table; width: 100%; table-layout: fixed; }
         tbody td { padding: 8px 10px; border-bottom: 1px solid #2a2a2a; }
         tr.new-row { animation: flash 1.2s ease-out; }
         @keyframes flash {
@@ -109,17 +132,21 @@
         footer {
             width: 100%;
             text-align: center;
-            padding: 20px 12px 4px;
-            color: #666;
-            font-size: 12px;
+            padding: 10px 12px;
+            color: #bbb;
+            font-size: 15px;
+            font-weight: bold;
+            letter-spacing: 0.02em;
             border-top: 1px solid #262626;
-            margin-top: 8px;
+            margin-top: 12px;
+            flex: 0 0 auto;
         }
     </style>
 </head>
 <body>
     <h1>TRANSMISSÃO SRT — MONITOR SCTE-35</h1>
 
+    <div class="main-row">
     <div class="video-container">
         <video
             id="meu-player"
@@ -132,7 +159,7 @@
         </video>
     </div>
 
-    <div style="flex: 1 1 320px; max-width: 420px; display: flex; flex-direction: column; gap: 16px;">
+    <div class="side-col">
         <div class="last-cue empty" id="lastCue">
             <div class="last-cue-label">Último cue recebido</div>
             <div class="last-cue-body" id="lastCueBody">Aguardando cues...</div>
@@ -158,13 +185,14 @@
             </table>
         </div>
     </div>
+    </div>
 
     <footer>
         Este é um sistema de testes para monitoração de SCTE-35, exclusivo e dedicado aos clientes Videomart TVPLAY.
     </footer>
 
     <script>
-        var streamPath = new URLSearchParams(window.location.search).get('stream') || 'teste';
+        var streamPath = new URLSearchParams(window.location.search).get('stream') || 'videomart';
         // Proxiado pela mesma origem/porta da página (server.js /hls-live/*),
         // em vez de apontar direto pro MediaMTX (porta interna, HTTP puro) --
         // evita mixed content numa página HTTPS e não exige expor essa porta.

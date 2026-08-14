@@ -1,27 +1,73 @@
 ###############################################
-# MediaMTX config — recepção SRT com SCTE-35 (CUEI)
-# preservado no remux para HLS.
+# MediaMTX config — recepção SRT multi-cliente com HLS de saída.
+#
+# Cada cliente é um path nomeado (username), provisionado dinamicamente
+# via Control API pelo scte-monitor (ver clients.js/mediamtx-api.js) --
+# não listado aqui manualmente. Cada path tem sua própria
+# srtPublishPassphrase, definida no cadastro do cliente.
 
-# --- SRT (ingest) ---
-# O TVPlay transmite para o scte-monitor (porta 8890 na rede do host), que
-# detecta os cues SCTE-35 e retransmite o stream completo para cá, nesta
-# porta 8891, para o remux em HLS.
+# --- Control API: permite o scte-monitor criar/remover paths em runtime,
+# sem reiniciar o MediaMTX (POST/DELETE /v3/config/paths/*). ---
+api: yes
+apiAddress: :9997
+
+# Auth por usuário/senha para a API (o default do MediaMTX só libera a API
+# sem senha para IPs 127.0.0.1/::1 -- o scte-monitor chama via rede Docker,
+# IP diferente, então precisa de credenciais). MediaMTX não suporta ${VAR}
+# no yml -- a senha real é injetada via env var MTX_AUTHINTERNALUSERS_0_PASS
+# no docker-compose (sobrescreve este campo em runtime).
+authInternalUsers:
+  - user: scte-monitor
+    pass: changeme
+    ips: []
+    permissions:
+      - action: api
+  - user: any
+    pass:
+    ips: ["127.0.0.1", "::1"]
+    permissions:
+      - action: api
+      - action: metrics
+      - action: pprof
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+        path:
+      - action: read
+        path:
+      - action: playback
+        path:
+
+# --- SRT (ingest multi-cliente) ---
+# Cada cliente do TVPlay transmite direto para cá, streamid publish:<usuario>.
 srt: yes
-srtAddress: :8891
+srtAddress: :8890
 
-# --- HLS (saída para validação/consumo) ---
+# --- HLS (saída, um path por cliente: streaming.tvtupi.com.br/<usuario>) ---
 hls: yes
 hlsAddress: :8888
-hlsAlwaysRemux: yes
 hlsVariant: mpegts
 hlsSegmentCount: 7
 hlsSegmentDuration: 2s
-hlsAllowOrigins: ['*']
+hlsAllowOrigins: ["*"]
 
 # --- Desliga o que não estamos usando ---
 rtsp: no
 rtmp: no
 webrtc: no
+
+pathDefaults:
+  # Dispara o scte-monitor para iniciar/parar a detecção de cues SCTE-35
+  # daquele cliente (processo tsp dedicado, lendo de volta deste MediaMTX
+  # via SRT local) quando o stream fica disponível/indisponível.
+  # A imagem do MediaMTX não tem shell nem curl -- o comando é executado via
+  # exec direto (sem shell), e o binário wget vem de mediamtx.Dockerfile
+  # (cópia estática do busybox). Sem aspas duplas com $VAR: não há shell pra
+  # expandir isso -- o MediaMTX expande $MTX_PATH ele mesmo antes do parse.
+  runOnAvailable: wget -q -O- --post-data='{"path":"$MTX_PATH"}' --header=Content-Type:application/json http://scte-monitor:8095/internal/stream-available
+  runOnUnavailable: wget -q -O- --post-data='{"path":"$MTX_PATH"}' --header=Content-Type:application/json http://scte-monitor:8095/internal/stream-unavailable
 
 paths:
   all_others:

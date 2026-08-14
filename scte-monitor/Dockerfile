@@ -11,8 +11,9 @@ RUN apt-get update && \
     rm -rf /tmp/tsduck.deb /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY package.json server.js ./
+COPY package.json server.js clients.js mediamtx-api.js ./
 COPY public ./public
+COPY admin ./admin
 
 EXPOSE 8095
 CMD ["node", "server.js"]

@@ -10,13 +10,13 @@ Transmita com qualquer software de streaming (OBS Studio, ffmpeg) e assista pela
 - **Porta 8085** — página web com o player HLS (`http://SEU_IP:8085/`), também exposta
   via HTTPS em `https://rtmp.tvtupi.com.br/` (ver **HTTPS via domínio** abaixo).
   Sem transmissão ativa, o player tenta recarregar sozinho a cada 5s — não precisa F5.
-- **Porta 8890 (SRT)** — recebe transmissão SRT com SCTE-35 embutido (ex: TVPlay/SDK
-  Medialooks). O serviço `scte-monitor` detecta os cues (cue-in/cue-out) em tempo real,
-  loga cada evento e retransmite o stream para o `mediamtx`, que gera o HLS
-  correspondente. Ver seção **SRT + monitor de cues SCTE-35** abaixo.
-- **Porta 8095** — página web com player + tabela de cues SCTE-35 recebidos em tempo
-  real (`http://SEU_IP:8095/`), também exposta via HTTPS em
-  `https://streaming.tvtupi.com.br/`, protegida por HTTP Basic Auth.
+- **Porta 8890 (SRT)** — recebe transmissão SRT multi-cliente com SCTE-35 embutido
+  (ex: TVPlay/SDK Medialooks). Cada cliente é um path próprio no `mediamtx`, com
+  streamid e passphrase individuais, cadastrado via painel admin. Ver seção
+  **SRT + monitor de cues SCTE-35 (multi-cliente)** abaixo.
+- **Porta 8095** — painel admin (`/admin`, protegido por Basic Auth) e páginas
+  públicas por cliente (`/​<usuario>`, sem autenticação) com player + tabela de cues
+  SCTE-35 em tempo real. Também exposta via HTTPS em `https://streaming.tvtupi.com.br/`.
 
 RTMP **não carrega SCTE-35** (limitação do protocolo, não deste servidor) — para
 receber cue points use sempre a porta SRT (8890), não a RTMP (1935).
@@ -158,40 +158,64 @@ o bloco `networks: proxy` e as variáveis `VIRTUAL_HOST`/`LETSENCRYPT_*` do
 `docker-compose.yml` — o acesso local via `:8085` continua funcionando normalmente sem
 elas.
 
-## SRT + monitor de cues SCTE-35
+## SRT + monitor de cues SCTE-35 (multi-cliente)
 
 Antes de subir, copie `.env.example` para `.env` e preencha:
 
 ```bash
 cp .env.example .env
-# edite SCTE_SRT_PASSPHRASE, SCTE_WEB_USER, SCTE_WEB_PASS
+# edite SCTE_ADMIN_USER, SCTE_ADMIN_PASS, MEDIAMTX_API_PASS
 ```
 
-- `SCTE_SRT_PASSPHRASE` — senha SRT (10-79 caracteres) exigida do lado de quem
-  transmite (TVPlay). Sem isso, qualquer um na rede pode publicar no streamid.
-- `SCTE_WEB_USER` / `SCTE_WEB_PASS` — credenciais HTTP Basic Auth da página do
-  monitor (`:8095`).
+- `SCTE_ADMIN_USER` / `SCTE_ADMIN_PASS` — credenciais do painel admin (`/admin`),
+  onde se cadastra/remove clientes.
+- `MEDIAMTX_API_PASS` — senha interna (rede Docker, nunca exposta externamente) que o
+  `scte-monitor` usa para provisionar paths no `mediamtx` via Control API. Gere um
+  valor aleatório qualquer (ex: `openssl rand -base64 16`).
 
-Como transmitir (TVPlay ou qualquer encoder com saída SRT + embed SCTE-35):
+### Cadastrando um cliente
+
+Acesse `https://streaming.tvtupi.com.br/admin` (login `SCTE_ADMIN_USER`/`SCTE_ADMIN_PASS`),
+informe um nome de usuário (ex: `videomart`) e, opcionalmente, uma senha SRT — se
+deixar em branco, uma é gerada automaticamente. Isso:
+
+1. Cria o cliente (arquivo `scte-monitor/logs/clients.json`).
+2. Provisiona um path dedicado no `mediamtx` (via Control API, sem reiniciar nada),
+   com `srtPublishPassphrase` própria daquele cliente.
+
+O cadastro devolve as credenciais de transmissão — **anote na hora**, a senha não é
+mostrada de novo (mas pode ser trocada recriando o cliente).
+
+### Como o cliente transmite (TVPlay ou qualquer encoder com SRT + embed SCTE-35)
 
 ```
-srt://SEU_IP:8890?streamid=publish:teste&passphrase=SUA_PASSPHRASE
+srt://streaming.tvtupi.com.br:8890?streamid=publish:<usuario>&passphrase=<senha_do_cliente>
 ```
 
-Acesse `http://SEU_IP:8095/` (login com `SCTE_WEB_USER`/`SCTE_WEB_PASS`) para ver o
-player e a tabela de cues recebidos em tempo real (mais recente no topo).
+### Como assistir
 
-Arquitetura interna: `scte-monitor` recebe o SRT, usa TSDuck (`tsp` +
-`splicemonitor`) para detectar os cues e retransmite o stream completo para o
-`mediamtx` (porta interna 8891), que faz o remux para HLS servido em `:8888`
-(consumido pela página do monitor, não exposto diretamente para uso externo).
+`https://streaming.tvtupi.com.br/<usuario>` — página **pública, sem login** (serve
+como vitrine/demonstração), com o player HLS e a tabela de cues daquele cliente em
+tempo real.
 
-Logs e histórico de cues (persistem entre reinícios) ficam em `scte-monitor/logs/`.
+### Arquitetura interna
 
-**Limitação atual:** suporta 1 transmissão por vez (streamid fixo `teste`). Para
-múltiplos clientes simultâneos, veja `scte-monitor/server.js` (`SRT_STREAMID`,
-`FORWARD_STREAMID`) — cada cliente precisaria de uma instância própria do serviço
-com portas/streamid distintos.
+- `mediamtx` recebe o SRT de todos os clientes diretamente (multi-stream nativo, um
+  path por cliente/streamid) e gera o HLS correspondente.
+- `scte-monitor` não fica mais no caminho do ingest. Quando o `mediamtx` sinaliza
+  (`runOnAvailable`/`runOnUnavailable`) que um cliente começou/parou de transmitir, o
+  `scte-monitor` inicia/encerra um processo `tsp` dedicado àquele cliente, que lê o
+  stream de volta do `mediamtx` (SRT local) só para detectar os cues via
+  `splicemonitor` — sem tocar no vídeo em si.
+- A imagem do `mediamtx` (`mediamtx.Dockerfile`) adiciona um binário `wget` estático
+  (cópia do busybox), porque a imagem oficial não tem shell/cliente HTTP e os hooks
+  precisam chamar o `scte-monitor`.
+- Logs e histórico de cues (por cliente, persistem entre reinícios) ficam em
+  `scte-monitor/logs/history/<usuario>.json`.
+
+**Limitação atual:** a passphrase SRT é validada pelo `mediamtx` por path — cada
+cliente já tem a sua, mas todos compartilham a mesma porta de ingest (`8890`) e o
+mesmo domínio de visualização.
 
 ## Publicação no GitHub
 

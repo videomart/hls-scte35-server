@@ -192,11 +192,13 @@
     </footer>
 
     <script>
-        var streamPath = new URLSearchParams(window.location.search).get('stream') || 'videomart';
+        // Username vem do path da URL: streaming.tvtupi.com.br/<usuario>
+        var pathParts = window.location.pathname.split('/').filter(Boolean);
+        var username = pathParts[0] || '';
         // Proxiado pela mesma origem/porta da página (server.js /hls-live/*),
         // em vez de apontar direto pro MediaMTX (porta interna, HTTP puro) --
         // evita mixed content numa página HTTPS e não exige expor essa porta.
-        var streamUrl = '/hls-live/' + streamPath + '/index.m3u8';
+        var streamUrl = '/hls-live/' + username + '/index.m3u8';
 
         var player = videojs('meu-player', {
             autoplay: true,
@@ -273,7 +275,7 @@
         }
 
         function connect() {
-            var es = new EventSource('/events');
+            var es = new EventSource('/events?client=' + encodeURIComponent(username));
             es.onopen = function () {
                 statusDot.className = 'status-dot live';
             };

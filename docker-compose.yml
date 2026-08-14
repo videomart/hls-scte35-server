@@ -25,28 +25,39 @@ services:
     restart: always
 
   mediamtx:
-    image: bluenviron/mediamtx:latest
+    build:
+      context: .
+      dockerfile: mediamtx.Dockerfile
+    image: mediamtx-scte:latest
     container_name: mediamtx_srt_server
+    depends_on:
+      - scte-monitor
     ports:
-      - "8888:8888" # HLS de saída (player/validação)
-      # Porta 8891 (SRT) não é exposta ao host: só o scte-monitor,
-      # na rede interna do compose, retransmite pra cá.
+      - "8890:8890/udp" # Ingest SRT multi-cliente (TVPlay de cada cliente -> aqui)
+      - "8888:8888"     # HLS de saída (player/validação)
+      # Porta 9997 (Control API) não é exposta ao host: só o scte-monitor,
+      # na rede interna do compose, provisiona clientes por ali.
+    environment:
+      MTX_AUTHINTERNALUSERS_0_PASS: "${MEDIAMTX_API_PASS}"
     volumes:
       - ./mediamtx.yml:/mediamtx.yml
+    networks:
+      - default
     restart: always
 
   scte-monitor:
     build: ./scte-monitor
     container_name: scte_monitor
-    depends_on:
-      - mediamtx
     environment:
-      SRT_LISTEN: "0.0.0.0:8890"
-      SRT_PASSPHRASE: "${SCTE_SRT_PASSPHRASE}"
-      FORWARD_SRT_CALLER: "mediamtx:8891"
-      FORWARD_STREAMID: "publish:videomart"
-      BASIC_AUTH_USER: "${SCTE_WEB_USER}"
-      BASIC_AUTH_PASS: "${SCTE_WEB_PASS}"
+      MEDIAMTX_HOST: "mediamtx"
+      MEDIAMTX_SRT_PORT: "8890"
+      MEDIAMTX_HLS_PORT: "8888"
+      MEDIAMTX_API_HOST: "mediamtx"
+      MEDIAMTX_API_PORT: "9997"
+      MEDIAMTX_API_USER: "scte-monitor"
+      MEDIAMTX_API_PASS: "${MEDIAMTX_API_PASS}"
+      ADMIN_USER: "${SCTE_ADMIN_USER}"
+      ADMIN_PASS: "${SCTE_ADMIN_PASS}"
       # HTTPS automático via nginx-proxy + acme-companion -- ver comentário
       # equivalente no serviço rtmp-server.
       VIRTUAL_HOST: "streaming.tvtupi.com.br"
@@ -57,8 +68,7 @@ services:
       - default
       - proxy
     ports:
-      - "8890:8890/udp" # Ingest SRT (TVPlay -> aqui)
-      - "8095:8095"     # Página do monitor (player + tabela de cues) -- acesso direto/local
+      - "8095:8095" # Painel admin + páginas públicas por cliente -- acesso direto/local
     volumes:
       - ./scte-monitor/logs:/app/logs
     restart: always

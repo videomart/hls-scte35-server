@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin — Clientes SCTE-35</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #141414;
+            color: white;
+            margin: 0;
+            padding: 32px;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        h1 { color: #ffffff; font-size: 22px; }
+        .panel {
+            background: #1e1e1e;
+            border-radius: 8px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.7);
+            padding: 20px;
+            margin-bottom: 24px;
+        }
+        .form-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 8px; }
+        label { display: block; font-size: 12px; color: #999; margin-bottom: 4px; }
+        input {
+            background: #262626; border: 1px solid #333; color: white;
+            padding: 8px 10px; border-radius: 4px; font-size: 14px;
+        }
+        button {
+            background: #E50914; color: white; border: none; padding: 9px 18px;
+            border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold;
+        }
+        button:hover { background: #ff1a25; }
+        button.danger { background: #333; }
+        button.danger:hover { background: #444; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }
+        th { text-align: left; padding: 8px 10px; color: #999; border-bottom: 1px solid #333; font-weight: normal; }
+        td { padding: 8px 10px; border-bottom: 1px solid #2a2a2a; }
+        code { background: #262626; padding: 2px 6px; border-radius: 3px; font-size: 12px; }
+        .msg { padding: 10px; border-radius: 4px; margin-bottom: 12px; font-size: 13px; display: none; }
+        .msg.error { background: #e74c3c33; color: #ff6b5e; display: block; }
+        .msg.success { background: #2ecc7133; color: #4ee08a; display: block; }
+        .hint { font-size: 12px; color: #777; margin-top: 4px; }
+        .credentials-box { background: #0f2f1f; border: 1px solid #2ecc71; border-radius: 4px; padding: 12px; margin-top: 12px; font-size: 13px; }
+    </style>
+</head>
+<body>
+    <h1>Admin — Clientes SCTE-35</h1>
+
+    <div class="panel">
+        <div id="msg" class="msg"></div>
+        <div class="form-row">
+            <div>
+                <label for="username">Usuário</label>
+                <input id="username" placeholder="ex: videomart" autocomplete="off">
+            </div>
+            <div>
+                <label for="passphrase">Senha SRT (opcional, gera automática se vazio)</label>
+                <input id="passphrase" placeholder="mín. 10 caracteres" autocomplete="off">
+            </div>
+            <button onclick="createClient()">Cadastrar cliente</button>
+        </div>
+        <div class="hint">
+            Usuário vira a URL pública (streaming.tvtupi.com.br/&lt;usuario&gt;) e o streamid SRT
+            (publish:&lt;usuario&gt;). A senha é a passphrase SRT que o encoder usa para transmitir.
+        </div>
+        <div id="newClientBox"></div>
+    </div>
+
+    <div class="panel">
+        <table>
+            <thead>
+                <tr><th>Usuário</th><th>Criado em</th><th>URL pública</th><th></th></tr>
+            </thead>
+            <tbody id="clientsBody">
+                <tr><td colspan="4">Carregando...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        var msgEl = document.getElementById('msg');
+        var newClientBox = document.getElementById('newClientBox');
+        var clientsBody = document.getElementById('clientsBody');
+
+        function showMsg(text, type) {
+            msgEl.className = 'msg ' + type;
+            msgEl.textContent = text;
+        }
+
+        function fmtDate(iso) {
+            return new Date(iso).toLocaleString('pt-BR');
+        }
+
+        function loadClients() {
+            fetch('/admin/api/clients')
+                .then(function (r) { return r.json(); })
+                .then(function (list) {
+                    if (list.length === 0) {
+                        clientsBody.innerHTML = '<tr><td colspan="4">Nenhum cliente cadastrado ainda.</td></tr>';
+                        return;
+                    }
+                    clientsBody.innerHTML = '';
+                    list.forEach(function (c) {
+                        var tr = document.createElement('tr');
+                        var url = window.location.origin + '/' + c.username;
+                        tr.innerHTML =
+                            '<td>' + c.username + '</td>' +
+                            '<td>' + fmtDate(c.createdAt) + '</td>' +
+                            '<td><a href="' + url + '" target="_blank" style="color:#4ee08a">' + url + '</a></td>' +
+                            '<td><button class="danger" data-user="' + c.username + '">Remover</button></td>';
+                        clientsBody.appendChild(tr);
+                    });
+                    Array.prototype.forEach.call(clientsBody.querySelectorAll('button.danger'), function (btn) {
+                        btn.addEventListener('click', function () { removeClient(btn.dataset.user); });
+                    });
+                });
+        }
+
+        function createClient() {
+            var username = document.getElementById('username').value.trim();
+            var passphrase = document.getElementById('passphrase').value.trim();
+            newClientBox.innerHTML = '';
+            fetch('/admin/api/clients', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: username, passphrase: passphrase || undefined })
+            })
+                .then(function (r) { return r.json().then(function (data) { return { ok: r.ok, data: data }; }); })
+                .then(function (res) {
+                    if (!res.ok) {
+                        showMsg(res.data.error || 'Erro ao cadastrar cliente.', 'error');
+                        return;
+                    }
+                    showMsg('Cliente "' + res.data.username + '" cadastrado com sucesso.', 'success');
+                    document.getElementById('username').value = '';
+                    document.getElementById('passphrase').value = '';
+                    var url = window.location.origin + '/' + res.data.username;
+                    newClientBox.innerHTML =
+                        '<div class="credentials-box">' +
+                        '<strong>Credenciais de transmissão (anote agora, a senha não será mostrada de novo):</strong><br>' +
+                        'SRT: <code>srt://' + window.location.hostname + ':8890?streamid=publish:' + res.data.username +
+                        '&passphrase=' + res.data.passphrase + '</code><br>' +
+                        'Visualização pública: <code>' + url + '</code>' +
+                        '</div>';
+                    loadClients();
+                })
+                .catch(function () { showMsg('Erro de rede ao cadastrar cliente.', 'error'); });
+        }
+
+        function removeClient(username) {
+            if (!confirm('Remover o cliente "' + username + '"? Isso encerra a transmissão dele.')) return;
+            fetch('/admin/api/clients/' + encodeURIComponent(username), { method: 'DELETE' })
+                .then(function () { loadClients(); });
+        }
+
+        loadClients();
+    </script>
+</body>
+</html>

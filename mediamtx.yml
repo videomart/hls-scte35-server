@@ -1,10 +1,18 @@
 ###############################################
-# MediaMTX config — recepção SRT multi-cliente com HLS de saída.
+# MediaMTX config — HLS de saída multi-cliente.
+#
+# O ingest SRT real do TVPlay não vem mais direto pra cá (porta 8890): o
+# MediaMTX descarta silenciosamente qualquer track de codec desconhecido já
+# na recepção SRT ("skipping track N (unsupported codec)"), o que incluiria
+# o PID de SCTE-35. O TVPlay conecta no scte-monitor (porta dedicada por
+# cliente, 8900-8930), que faz relay bruto pra cá -- só depois desse relay é
+# que o SCTE-35 (já extraído pelo detector) deixa de importar, e o MediaMTX
+# só precisa mesmo dar conta de vídeo/áudio pro HLS.
 #
 # Cada cliente é um path nomeado (username), provisionado dinamicamente
 # via Control API pelo scte-monitor (ver clients.js/mediamtx-api.js) --
 # não listado aqui manualmente. Cada path tem sua própria
-# srtPublishPassphrase, definida no cadastro do cliente.
+# srtPublishPassphrase/srtReadPassphrase, definida no cadastro do cliente.
 
 # --- Control API: permite o scte-monitor criar/remover paths em runtime,
 # sem reiniciar o MediaMTX (POST/DELETE /v3/config/paths/*). ---
@@ -40,8 +48,7 @@ authInternalUsers:
       - action: playback
         path:
 
-# --- SRT (ingest multi-cliente) ---
-# Cada cliente do TVPlay transmite direto para cá, streamid publish:<usuario>.
+# --- SRT (recebe o relay do scte-monitor, não mais o TVPlay direto) ---
 srt: yes
 srtAddress: :8890
 
@@ -57,17 +64,6 @@ hlsAllowOrigins: ["*"]
 rtsp: no
 rtmp: no
 webrtc: no
-
-pathDefaults:
-  # Dispara o scte-monitor para iniciar/parar a detecção de cues SCTE-35
-  # daquele cliente (processo tsp dedicado, lendo de volta deste MediaMTX
-  # via SRT local) quando o stream fica disponível/indisponível.
-  # A imagem do MediaMTX não tem shell nem curl -- o comando é executado via
-  # exec direto (sem shell), e o binário wget vem de mediamtx.Dockerfile
-  # (cópia estática do busybox). Sem aspas duplas com $VAR: não há shell pra
-  # expandir isso -- o MediaMTX expande $MTX_PATH ele mesmo antes do parse.
-  runOnAvailable: wget -q -O- --post-data='{"path":"$MTX_PATH"}' --header=Content-Type:application/json http://scte-monitor:8095/internal/stream-available
-  runOnUnavailable: wget -q -O- --post-data='{"path":"$MTX_PATH"}' --header=Content-Type:application/json http://scte-monitor:8095/internal/stream-unavailable
 
 paths:
   all_others:

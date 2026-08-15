@@ -63,8 +63,8 @@
             <button onclick="createClient()">Cadastrar cliente</button>
         </div>
         <div class="hint">
-            Usuário vira a URL pública (streaming.tvtupi.com.br/&lt;usuario&gt;) e o streamid SRT
-            (publish:&lt;usuario&gt;). A senha é a passphrase SRT que o encoder usa para transmitir.
+            Usuário vira a URL pública (streaming.tvtupi.com.br/&lt;usuario&gt;) e recebe uma
+            porta SRT dedicada para transmissão. A senha é a passphrase SRT que o encoder usa.
         </div>
         <div id="newClientBox"></div>
     </div>
@@ -72,10 +72,10 @@
     <div class="panel">
         <table>
             <thead>
-                <tr><th>Usuário</th><th>Criado em</th><th>URL pública</th><th></th></tr>
+                <tr><th>Usuário</th><th>Porta SRT</th><th>Criado em</th><th>URL pública</th><th></th></tr>
             </thead>
             <tbody id="clientsBody">
-                <tr><td colspan="4">Carregando...</td></tr>
+                <tr><td colspan="5">Carregando...</td></tr>
             </tbody>
         </table>
     </div>
@@ -99,7 +99,7 @@
                 .then(function (r) { return r.json(); })
                 .then(function (list) {
                     if (list.length === 0) {
-                        clientsBody.innerHTML = '<tr><td colspan="4">Nenhum cliente cadastrado ainda.</td></tr>';
+                        clientsBody.innerHTML = '<tr><td colspan="5">Nenhum cliente cadastrado ainda.</td></tr>';
                         return;
                     }
                     clientsBody.innerHTML = '';
@@ -108,6 +108,7 @@
                         var url = window.location.origin + '/' + c.username;
                         tr.innerHTML =
                             '<td>' + c.username + '</td>' +
+                            '<td>' + (c.srtPort || '—') + '</td>' +
                             '<td>' + fmtDate(c.createdAt) + '</td>' +
                             '<td><a href="' + url + '" target="_blank" style="color:#4ee08a">' + url + '</a></td>' +
                             '<td><button class="danger" data-user="' + c.username + '">Remover</button></td>';
@@ -141,8 +142,8 @@
                     newClientBox.innerHTML =
                         '<div class="credentials-box">' +
                         '<strong>Credenciais de transmissão (anote agora, a senha não será mostrada de novo):</strong><br>' +
-                        'SRT: <code>srt://' + window.location.hostname + ':8890?streamid=publish:' + res.data.username +
-                        '&passphrase=' + res.data.passphrase + '</code><br>' +
+                        'SRT: <code>srt://' + window.location.hostname + ':' + res.data.srtPort +
+                        '?passphrase=' + res.data.passphrase + '</code><br>' +
                         'Visualização pública: <code>' + url + '</code>' +
                         '</div>';
                     loadClients();

@@ -11,8 +11,23 @@ const crypto = require('crypto');
 const CLIENTS_FILE = process.env.CLIENTS_FILE || path.join(__dirname, 'logs', 'clients.json');
 
 const USERNAME_RE = /^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$/;
+// Cada cliente tem uma porta SRT dedicada (o TVPlay conecta aqui, não mais
+// direto no MediaMTX): o MediaMTX descarta silenciosamente qualquer track de
+// codec desconhecido (inclui SCTE-35) já na recepção -- "skipping track N
+// (unsupported codec)" -- então o SCTE-35 precisa passar por um relay tsp
+// bruto (bytes crus, sem demux) antes de chegar no MediaMTX.
+const SRT_PORT_BASE = Number(process.env.SRT_PORT_BASE || 8900);
+const SRT_PORT_MAX = Number(process.env.SRT_PORT_MAX || 8930);
 
-let clients = new Map(); // username -> { username, passphrase, createdAt }
+let clients = new Map(); // username -> { username, passphrase, srtPort, createdAt }
+
+function allocPort() {
+  const used = new Set([...clients.values()].map((c) => c.srtPort).filter(Boolean));
+  for (let p = SRT_PORT_BASE; p <= SRT_PORT_MAX; p++) {
+    if (!used.has(p)) return p;
+  }
+  throw new Error(`Sem portas SRT disponíveis (limite: ${SRT_PORT_MAX - SRT_PORT_BASE + 1} clientes)`);
+}
 
 function load() {
   try {
@@ -47,7 +62,7 @@ function generatePassphrase() {
 }
 
 function list() {
-  return Array.from(clients.values()).map(({ username, createdAt }) => ({ username, createdAt }));
+  return Array.from(clients.values()).map(({ username, srtPort, createdAt }) => ({ username, srtPort, createdAt }));
 }
 
 function get(username) {
@@ -62,6 +77,7 @@ function create(username, passphrase) {
   const record = {
     username,
     passphrase: passphrase || generatePassphrase(),
+    srtPort: allocPort(),
     createdAt: new Date().toISOString(),
   };
   clients.set(username, record);
@@ -76,5 +92,21 @@ function remove(username) {
 }
 
 load();
+
+// Migração: clientes cadastrados antes da porta SRT dedicada existir
+// recebem uma na próxima carga (também precisam ser reprovisionados no
+// MediaMTX com srtReadPassphrase -- ver server.js/mediamtx-api.js).
+let migratedOnLoad = false;
+for (const c of clients.values()) {
+  if (!c.srtPort) {
+    try {
+      c.srtPort = allocPort();
+      migratedOnLoad = true;
+    } catch (e) {
+      console.warn(`[${c.username}] Falha ao migrar srtPort:`, e.message);
+    }
+  }
+}
+if (migratedOnLoad) persist();
 
 module.exports = { list, get, create, remove, generatePassphrase, validateUsername };

@@ -33,10 +33,10 @@ services:
     depends_on:
       - scte-monitor
     ports:
-      - "8890:8890/udp" # Ingest SRT multi-cliente (TVPlay de cada cliente -> aqui)
-      - "8888:8888"     # HLS de saída (player/validação)
-      # Porta 9997 (Control API) não é exposta ao host: só o scte-monitor,
-      # na rede interna do compose, provisiona clientes por ali.
+      - "8888:8888" # HLS de saída (player/validação)
+      # Porta 8890 (SRT) e 9997 (Control API) não são expostas ao host: o
+      # ingest real vem do scte-monitor (relay tsp por cliente, portas
+      # 8900-8930), não mais direto do TVPlay -- ver comentário em server.js.
     environment:
       MTX_AUTHINTERNALUSERS_0_PASS: "${MEDIAMTX_API_PASS}"
     volumes:
@@ -58,6 +58,8 @@ services:
       MEDIAMTX_API_PASS: "${MEDIAMTX_API_PASS}"
       ADMIN_USER: "${SCTE_ADMIN_USER}"
       ADMIN_PASS: "${SCTE_ADMIN_PASS}"
+      SRT_PORT_BASE: "8900"
+      SRT_PORT_MAX: "8930"
       # HTTPS automático via nginx-proxy + acme-companion -- ver comentário
       # equivalente no serviço rtmp-server.
       VIRTUAL_HOST: "streaming.tvtupi.com.br"
@@ -68,7 +70,8 @@ services:
       - default
       - proxy
     ports:
-      - "8095:8095" # Painel admin + páginas públicas por cliente -- acesso direto/local
+      - "8095:8095"           # Painel admin + páginas públicas por cliente -- acesso direto/local
+      - "8900-8930:8900-8930/udp" # Ingest SRT: 1 porta dedicada por cliente (client.srtPort)
     volumes:
       - ./scte-monitor/logs:/app/logs
     restart: always

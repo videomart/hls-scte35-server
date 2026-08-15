@@ -112,10 +112,21 @@ function handleSpliceEvent(username, evt) {
   broadcast(state, record);
 }
 
-// --- Processo tsp por cliente: lê o SRT de volta do MediaMTX (não do
-// publisher direto -- o MediaMTX já é quem recebe o ingest multi-cliente) e
-// detecta splice events via splicemonitor. Iniciado sob demanda quando o
-// MediaMTX sinaliza runOnAvailable, encerrado em runOnUnavailable. ---
+// --- Processo tsp por cliente: escuta SRT numa porta dedicada e detecta
+// splice events via splicemonitor.
+//
+// O MediaMTX descarta silenciosamente qualquer track de codec desconhecido
+// já na recepção SRT ("skipping track N (unsupported codec)"), incluindo o
+// PID de SCTE-35 -- então ler de volta do MediaMTX nunca veria os cues,
+// mesmo com a passphrase de leitura certa. Por isso o TVPlay não conecta
+// mais direto no MediaMTX (porta 8890): conecta numa porta SRT dedicada
+// deste detector (client.srtPort), que faz splicemonitor (detecta cues) E
+// relay bruto (bytes crus, sem demux) para o MediaMTX -- preservando o PID
+// SCTE-35 no caminho, mesmo que o MediaMTX descarte na hora de reexibir.
+//
+// Processo permanente por cliente (não mais sob demanda via hook): inicia
+// no boot para todo cliente cadastrado, e auto-reinicia se cair (o listener
+// precisa estar sempre de pé esperando o TVPlay conectar/reconectar). ---
 let nextUdpPort = 9900;
 
 function startCueDetector(username) {
@@ -123,8 +134,8 @@ function startCueDetector(username) {
   if (state.tspProc) return; // já rodando
 
   const client = clients.get(username);
-  if (!client) {
-    console.warn(`[${username}] startCueDetector: cliente não encontrado, abortando`);
+  if (!client || !client.srtPort) {
+    console.warn(`[${username}] startCueDetector: cliente sem srtPort, abortando`);
     return;
   }
 
@@ -148,38 +159,45 @@ function startCueDetector(username) {
   udpSocket.bind(udpPort, '127.0.0.1');
   state.udpSocket = udpSocket;
 
-  // O stream publicado no MediaMTX é criptografado com a passphrase do
-  // cliente (SRT encryption) -- qualquer leitor, inclusive este detector de
-  // cues, precisa da mesma passphrase para decriptar, não só o publisher.
-  const readPassphraseArgs = client.passphrase ? ['--passphrase', client.passphrase] : [];
+  const passphraseArgs = client.passphrase ? ['--passphrase', client.passphrase] : [];
   const args = [
-    '-I', 'srt', '--caller', `${MEDIAMTX_HOST}:${MEDIAMTX_SRT_PORT}`, '--streamid', `read:${username}`, ...readPassphraseArgs,
+    // Input: listener SRT na porta dedicada do cliente -- o TVPlay conecta aqui.
+    '-I', 'srt', '--listener', `0.0.0.0:${client.srtPort}`, ...passphraseArgs,
+    // Detecta os cues e emite o JSON via UDP local.
     '-P', 'splicemonitor', '--json-udp', `127.0.0.1:${udpPort}`,
-    '-O', 'drop',
+    // Relay bruto (bytes crus, sem remux) para o MediaMTX -- preserva o PID
+    // SCTE-35 no caminho até lá, mesmo que o MediaMTX o descarte ao exibir.
+    '-O', 'srt', '--caller', `${MEDIAMTX_HOST}:${MEDIAMTX_SRT_PORT}`, '--streamid', `publish:${username}`, ...passphraseArgs,
   ];
-  console.log(`[${username}] Iniciando detector de cues:`, args.join(' '));
+  console.log(`[${username}] Iniciando detector+relay (SRT :${client.srtPort} -> mediamtx:${MEDIAMTX_SRT_PORT}):`, args.join(' '));
   const proc = spawn('tsp', args, { stdio: ['ignore', 'pipe', 'pipe'] });
   state.tspProc = proc;
 
   proc.stdout.on('data', (d) => process.stdout.write(`[tsp:${username}] ${d}`));
   proc.stderr.on('data', (d) => process.stderr.write(`[tsp:${username}] ${d}`));
   proc.on('exit', (code, signal) => {
-    console.log(`[${username}] Detector de cues encerrou (code=${code}, signal=${signal})`);
+    console.log(`[${username}] Detector+relay encerrou (code=${code}, signal=${signal})`);
     state.tspProc = null;
     if (state.udpSocket) {
       state.udpSocket.close();
       state.udpSocket = null;
     }
+    // O listener precisa estar sempre de pé para aceitar a próxima conexão
+    // do TVPlay. Delay evita loop apertado se o MediaMTX estiver indisponível.
+    setTimeout(() => {
+      if (clients.get(username) && !getState(username).tspProc) startCueDetector(username);
+    }, 3000);
   });
 }
 
 function stopCueDetector(username) {
   const state = perClientState.get(username);
   if (!state || !state.tspProc) return;
+  state.tspProc.removeAllListeners('exit'); // não reiniciar: remoção intencional do cliente
   state.tspProc.kill('SIGTERM');
 }
 
-// --- HTTP: pagina + SSE + historico + admin + endpoints internos ---
+// --- HTTP: pagina + SSE + historico + admin ---
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const ADMIN_DIR = path.join(__dirname, 'admin');
 
@@ -268,24 +286,6 @@ function sendJson(res, status, obj) {
   res.end(JSON.stringify(obj));
 }
 
-// --- Endpoints internos, chamados pelos hooks runOnAvailable/runOnUnavailable
-// do MediaMTX (rede interna Docker, não exposto externamente) ---
-async function handleInternalRoutes(req, res, urlPath) {
-  if (urlPath === '/internal/stream-available' && req.method === 'POST') {
-    const body = await readJsonBody(req).catch(() => ({}));
-    if (body.path && clients.get(body.path)) startCueDetector(body.path);
-    sendJson(res, 200, { ok: true });
-    return true;
-  }
-  if (urlPath === '/internal/stream-unavailable' && req.method === 'POST') {
-    const body = await readJsonBody(req).catch(() => ({}));
-    if (body.path) stopCueDetector(body.path);
-    sendJson(res, 200, { ok: true });
-    return true;
-  }
-  return false;
-}
-
 // --- Endpoints do painel admin (cadastro de clientes), protegidos por
 // Basic Auth com credenciais de administrador. ---
 async function handleAdminApi(req, res, urlPath) {
@@ -306,7 +306,13 @@ async function handleAdminApi(req, res, urlPath) {
         clients.remove(record.username); // rollback: não deixa cliente "meio criado"
         throw mtxErr;
       }
-      sendJson(res, 201, { username: record.username, passphrase: record.passphrase, createdAt: record.createdAt });
+      startCueDetector(record.username);
+      sendJson(res, 201, {
+        username: record.username,
+        passphrase: record.passphrase,
+        srtPort: record.srtPort,
+        createdAt: record.createdAt,
+      });
     } catch (err) {
       sendJson(res, 400, { error: err.message });
     }
@@ -333,10 +339,6 @@ async function handleAdminApi(req, res, urlPath) {
 const server = http.createServer(async (req, res) => {
   const urlObj = new URL(req.url, 'http://internal');
   const urlPath = urlObj.pathname;
-
-  if (urlPath.startsWith('/internal/')) {
-    if (await handleInternalRoutes(req, res, urlPath)) return;
-  }
 
   if (urlPath === '/admin' || urlPath === '/admin/') {
     if (!checkBasicAuth(req, res, ADMIN_USER, ADMIN_PASS, 'scte-monitor-admin')) return;
@@ -396,6 +398,32 @@ const server = http.createServer(async (req, res) => {
   serveFile(PUBLIC_DIR, urlPath === '/' ? '/index.html' : urlPath, req, res);
 });
 
+// O MediaMTX não persiste paths criados via Control API entre reinícios (não
+// ficam salvos no mediamtx.yml) -- todo boot precisa reprovisionar cada
+// cliente cadastrado, ou o relay é rejeitado ("passphrase is missing"/path
+// inexistente) mesmo com o cliente existindo localmente. Como os dois
+// containers sobem em paralelo, o DNS de "mediamtx" pode não estar pronto
+// ainda no primeiro boot (EAI_AGAIN) -- tenta de novo em vez de desistir.
+async function reprovisionAndStart(username, attempt = 1) {
+  const client = clients.get(username);
+  if (!client) return;
+  try {
+    await mediamtxApi.addOrReplacePath(client.username, client.passphrase);
+  } catch (err) {
+    console.error(`[${username}] Falha ao reprovisionar path no MediaMTX (tentativa ${attempt}):`, err.message);
+    if (attempt < 10) {
+      setTimeout(() => reprovisionAndStart(username, attempt + 1), 3000);
+      return;
+    }
+    console.error(`[${username}] Desistindo de reprovisionar após ${attempt} tentativas -- cliente pode não transmitir corretamente.`);
+  }
+  startCueDetector(username);
+}
+
 server.listen(HTTP_PORT, () => {
   console.log(`scte-monitor HTTP em http://0.0.0.0:${HTTP_PORT}`);
+  // Cada cliente cadastrado tem um listener SRT permanente dedicado -- sobe
+  // no boot para todos, não só sob demanda (o TVPlay pode reconectar a
+  // qualquer momento, o listener precisa estar sempre esperando).
+  for (const c of clients.list()) reprovisionAndStart(c.username);
 });

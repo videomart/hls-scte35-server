@@ -44,10 +44,15 @@ function request(method, apiPath, body) {
 
 // Cria (ou substitui) um path dedicado ao cliente, com passphrase SRT própria.
 // Idempotente: se o path já existir, replace sobrescreve com a config atual.
+// srtReadPassphrase precisa ser igual à srtPublishPassphrase: o stream
+// publicado é criptografado com essa chave (SRT encryption), então qualquer
+// leitor -- inclusive o detector de cues interno -- precisa dela para
+// decriptar, não só o publisher.
 function addOrReplacePath(username, passphrase) {
   return request('POST', `/v3/config/paths/replace/${encodeURIComponent(username)}`, {
     source: 'publisher',
     srtPublishPassphrase: passphrase,
+    srtReadPassphrase: passphrase,
   });
 }
 

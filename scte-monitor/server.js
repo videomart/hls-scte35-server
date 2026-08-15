@@ -122,6 +122,12 @@ function startCueDetector(username) {
   const state = getState(username);
   if (state.tspProc) return; // já rodando
 
+  const client = clients.get(username);
+  if (!client) {
+    console.warn(`[${username}] startCueDetector: cliente não encontrado, abortando`);
+    return;
+  }
+
   const udpPort = nextUdpPort++;
   state.udpPort = udpPort;
 
@@ -142,8 +148,12 @@ function startCueDetector(username) {
   udpSocket.bind(udpPort, '127.0.0.1');
   state.udpSocket = udpSocket;
 
+  // O stream publicado no MediaMTX é criptografado com a passphrase do
+  // cliente (SRT encryption) -- qualquer leitor, inclusive este detector de
+  // cues, precisa da mesma passphrase para decriptar, não só o publisher.
+  const readPassphraseArgs = client.passphrase ? ['--passphrase', client.passphrase] : [];
   const args = [
-    '-I', 'srt', '--caller', `${MEDIAMTX_HOST}:${MEDIAMTX_SRT_PORT}`, '--streamid', `read:${username}`,
+    '-I', 'srt', '--caller', `${MEDIAMTX_HOST}:${MEDIAMTX_SRT_PORT}`, '--streamid', `read:${username}`, ...readPassphraseArgs,
     '-P', 'splicemonitor', '--json-udp', `127.0.0.1:${udpPort}`,
     '-O', 'drop',
   ];

@@ -61,8 +61,15 @@ function generatePassphrase() {
   return crypto.randomBytes(12).toString('base64url'); // 16 chars
 }
 
+// Inclui a passphrase -- só chamado atrás de auth do painel admin
+// (checkBasicAuth em server.js), não é exposto em nenhuma rota pública.
 function list() {
-  return Array.from(clients.values()).map(({ username, srtPort, createdAt }) => ({ username, srtPort, createdAt }));
+  return Array.from(clients.values()).map(({ username, passphrase, srtPort, createdAt }) => ({
+    username,
+    passphrase,
+    srtPort,
+    createdAt,
+  }));
 }
 
 function get(username) {
@@ -91,6 +98,20 @@ function remove(username) {
   return existed;
 }
 
+function updatePassphrase(username, passphrase) {
+  const record = clients.get(username);
+  if (!record) {
+    throw new Error(`Usuário "${username}" não encontrado.`);
+  }
+  const newPassphrase = passphrase || generatePassphrase();
+  if (newPassphrase.length < 10 || newPassphrase.length > 79) {
+    throw new Error('Senha SRT precisa ter entre 10 e 79 caracteres.');
+  }
+  record.passphrase = newPassphrase;
+  persist();
+  return record;
+}
+
 load();
 
 // Migração: clientes cadastrados antes da porta SRT dedicada existir
@@ -109,4 +130,4 @@ for (const c of clients.values()) {
 }
 if (migratedOnLoad) persist();
 
-module.exports = { list, get, create, remove, generatePassphrase, validateUsername };
+module.exports = { list, get, create, remove, updatePassphrase, generatePassphrase, validateUsername };

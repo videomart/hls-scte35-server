@@ -35,6 +35,14 @@
         button:hover { background: #ff1a25; }
         button.danger { background: #333; }
         button.danger:hover { background: #444; }
+        button.icon-btn {
+            background: none; border: none; color: #999; padding: 4px 6px;
+            font-size: 15px; cursor: pointer; border-radius: 4px;
+        }
+        button.icon-btn:hover { background: #333; color: white; }
+        .passphrase-cell { display: flex; align-items: center; gap: 6px; font-family: monospace; }
+        .passphrase-value { min-width: 90px; }
+        .passphrase-value.hidden-value::selection { background: transparent; }
         table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }
         th { text-align: left; padding: 8px 10px; color: #999; border-bottom: 1px solid #333; font-weight: normal; }
         td { padding: 8px 10px; border-bottom: 1px solid #2a2a2a; }
@@ -72,10 +80,10 @@
     <div class="panel">
         <table>
             <thead>
-                <tr><th>Usuário</th><th>Porta SRT</th><th>Criado em</th><th>URL pública</th><th></th></tr>
+                <tr><th>Usuário</th><th>Senha SRT</th><th>Porta SRT</th><th>Criado em</th><th>URL pública</th><th></th></tr>
             </thead>
             <tbody id="clientsBody">
-                <tr><td colspan="5">Carregando...</td></tr>
+                <tr><td colspan="6">Carregando...</td></tr>
             </tbody>
         </table>
     </div>
@@ -94,12 +102,16 @@
             return new Date(iso).toLocaleString('pt-BR');
         }
 
+        function maskPassphrase(pass) {
+            return '•'.repeat(Math.min(pass.length, 12));
+        }
+
         function loadClients() {
             fetch('/admin/api/clients')
                 .then(function (r) { return r.json(); })
                 .then(function (list) {
                     if (list.length === 0) {
-                        clientsBody.innerHTML = '<tr><td colspan="5">Nenhum cliente cadastrado ainda.</td></tr>';
+                        clientsBody.innerHTML = '<tr><td colspan="6">Nenhum cliente cadastrado ainda.</td></tr>';
                         return;
                     }
                     clientsBody.innerHTML = '';
@@ -108,16 +120,58 @@
                         var url = window.location.origin + '/' + c.username;
                         tr.innerHTML =
                             '<td>' + c.username + '</td>' +
+                            '<td><div class="passphrase-cell">' +
+                            '<span class="passphrase-value" data-pass="' + c.passphrase + '" data-visible="false">' +
+                            maskPassphrase(c.passphrase) + '</span>' +
+                            '<button class="icon-btn toggle-pass" data-user="' + c.username + '" title="Mostrar/ocultar senha">👁</button>' +
+                            '</div></td>' +
                             '<td>' + (c.srtPort || '—') + '</td>' +
                             '<td>' + fmtDate(c.createdAt) + '</td>' +
                             '<td><a href="' + url + '" target="_blank" style="color:#4ee08a">' + url + '</a></td>' +
-                            '<td><button class="danger" data-user="' + c.username + '">Remover</button></td>';
+                            '<td>' +
+                            '<button class="icon-btn edit-pass" data-user="' + c.username + '" title="Editar senha">✎</button>' +
+                            '<button class="danger" data-user="' + c.username + '">Remover</button>' +
+                            '</td>';
                         clientsBody.appendChild(tr);
                     });
                     Array.prototype.forEach.call(clientsBody.querySelectorAll('button.danger'), function (btn) {
                         btn.addEventListener('click', function () { removeClient(btn.dataset.user); });
                     });
+                    Array.prototype.forEach.call(clientsBody.querySelectorAll('button.toggle-pass'), function (btn) {
+                        btn.addEventListener('click', function () { togglePassphrase(btn); });
+                    });
+                    Array.prototype.forEach.call(clientsBody.querySelectorAll('button.edit-pass'), function (btn) {
+                        btn.addEventListener('click', function () { editPassphrase(btn.dataset.user); });
+                    });
                 });
+        }
+
+        function togglePassphrase(btn) {
+            var span = btn.previousElementSibling;
+            var visible = span.dataset.visible === 'true';
+            span.textContent = visible ? maskPassphrase(span.dataset.pass) : span.dataset.pass;
+            span.dataset.visible = visible ? 'false' : 'true';
+        }
+
+        function editPassphrase(username) {
+            var newPass = prompt('Nova senha SRT para "' + username + '" (mín. 10 caracteres, deixe vazio para gerar automaticamente):');
+            if (newPass === null) return; // cancelado
+            newPass = newPass.trim();
+            fetch('/admin/api/clients/' + encodeURIComponent(username), {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ passphrase: newPass || undefined })
+            })
+                .then(function (r) { return r.json().then(function (data) { return { ok: r.ok, data: data }; }); })
+                .then(function (res) {
+                    if (!res.ok) {
+                        showMsg(res.data.error || 'Erro ao atualizar senha.', 'error');
+                        return;
+                    }
+                    showMsg('Senha de "' + username + '" atualizada. Lembre de reconfigurar o encoder com a nova senha.', 'success');
+                    loadClients();
+                })
+                .catch(function () { showMsg('Erro de rede ao atualizar senha.', 'error'); });
         }
 
         function createClient() {

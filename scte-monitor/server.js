@@ -190,11 +190,29 @@ function startCueDetector(username) {
   });
 }
 
+// kill('SIGTERM') não mata o processo instantaneamente -- se o chamador for
+// reiniciar o detector logo em seguida (ex: troca de senha), precisa esperar
+// a morte de fato ou startCueDetector encontra state.tspProc ainda
+// preenchido (apontando pro processo antigo) e não faz nada.
 function stopCueDetector(username) {
-  const state = perClientState.get(username);
-  if (!state || !state.tspProc) return;
-  state.tspProc.removeAllListeners('exit'); // não reiniciar: remoção intencional do cliente
-  state.tspProc.kill('SIGTERM');
+  return new Promise((resolve) => {
+    const state = perClientState.get(username);
+    if (!state || !state.tspProc) {
+      resolve();
+      return;
+    }
+    const proc = state.tspProc;
+    proc.removeAllListeners('exit'); // não reiniciar sozinho: paramos por um motivo explícito
+    proc.once('exit', () => {
+      state.tspProc = null;
+      if (state.udpSocket) {
+        state.udpSocket.close();
+        state.udpSocket = null;
+      }
+      resolve();
+    });
+    proc.kill('SIGTERM');
+  });
 }
 
 // --- HTTP: pagina + SSE + historico + admin ---
@@ -319,11 +337,29 @@ async function handleAdminApi(req, res, urlPath) {
     return true;
   }
 
+  const patchMatch = urlPath.match(/^\/admin\/api\/clients\/([^/]+)$/);
+  if (patchMatch && req.method === 'PATCH') {
+    const username = decodeURIComponent(patchMatch[1]);
+    try {
+      const body = await readJsonBody(req);
+      const record = clients.updatePassphrase(username, body.passphrase);
+      await mediamtxApi.addOrReplacePath(record.username, record.passphrase);
+      // O detector antigo está rodando com a passphrase velha -- precisa
+      // reiniciar com a nova, senão o TVPlay nunca mais consegue conectar.
+      await stopCueDetector(username);
+      startCueDetector(username);
+      sendJson(res, 200, { username: record.username, passphrase: record.passphrase, srtPort: record.srtPort });
+    } catch (err) {
+      sendJson(res, 400, { error: err.message });
+    }
+    return true;
+  }
+
   const deleteMatch = urlPath.match(/^\/admin\/api\/clients\/([^/]+)$/);
   if (deleteMatch && req.method === 'DELETE') {
     const username = decodeURIComponent(deleteMatch[1]);
     try {
-      stopCueDetector(username);
+      await stopCueDetector(username);
       await mediamtxApi.deletePath(username);
       const removed = clients.remove(username);
       sendJson(res, removed ? 200 : 404, { ok: removed });

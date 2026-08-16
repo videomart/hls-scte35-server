@@ -106,11 +106,14 @@ function broadcast(state, event) {
 function handleSpliceEvent(username, evt) {
   const state = getState(username);
   const eventId = evt['event-id'];
-  // A tabela SCTE-35 bruta (com o splice_info_section em base64) chega via
-  // um datagrama JSON separado, tipicamente antes ou junto do evento --
-  // guardamos as últimas por splice_event_id para anexar ao registro do cue
-  // (usado depois para popular EXT-X-DATERANGE SCTE35-OUT/IN no HLS).
+  // A tabela SCTE-35 bruta (com o splice_info_section em base64) chega via um
+  // datagrama JSON separado -- na prática, DEPOIS do evento, não antes
+  // (confirmado observando o tráfego real do splicemonitor em produção).
+  // Guardamos as pendentes por eventId só como fallback para o caso raro de
+  // chegar antes; o caminho normal é handleSpliceTable encontrar e
+  // retroativamente enriquecer o registro já criado aqui (ver abaixo).
   const pending = state.pendingTables && state.pendingTables.get(eventId);
+  if (state.pendingTables) state.pendingTables.delete(eventId);
   const record = {
     receivedAt: new Date().toISOString(),
     eventId,
@@ -120,7 +123,6 @@ function handleSpliceEvent(username, evt) {
     spliceInfoHex: pending ? pending.hex : null,
     durationMs: pending ? pending.durationMs : null,
   };
-  if (state.pendingTables) state.pendingTables.delete(eventId);
   state.history.unshift(record);
   if (state.history.length > MAX_HISTORY) state.history.length = MAX_HISTORY;
   persistHistory(username, state);
@@ -135,7 +137,11 @@ function handleSpliceEvent(username, evt) {
 // Extrai splice_event_id, o base64 do splice_info_section bruto, e a duração
 // (segmentation_duration/break_duration, unidade 90kHz) de um datagrama de
 // tabela SCTE-35 completa (emitido pelo splicemonitor com -a
-// --meta-base64-sections, ao lado dos datagramas de "event").
+// --meta-base64-sections, ao lado dos datagramas de "event"). Chega depois
+// do evento correspondente -- procura o registro já criado por
+// handleSpliceEvent (mesmo eventId, mesmo type quando dá pra inferir, ainda
+// sem hex) e completa ali; se não achar (ordem invertida, caso raro), guarda
+// como pendente para o próximo handleSpliceEvent consumir.
 function handleSpliceTable(username, tableObj) {
   const state = getState(username);
   if (!state.pendingTables) state.pendingTables = new Map();
@@ -144,31 +150,45 @@ function handleSpliceTable(username, tableObj) {
   let base64Section = null;
   let eventId = null;
   let durationPts = null;
+  let isOut = null; // out_of_network -- distingue o cue-out do cue-in de mesmo eventId
   for (const node of nodes) {
     if (node['#name'] === 'metadata') {
       const section = (node['#nodes'] || []).find((n) => n['#name'] === 'section');
       if (section && section.base64) base64Section = section.base64;
     } else if (node['#name'] === 'splice_insert') {
       eventId = node.splice_event_id;
+      isOut = node.out_of_network === true || node.out_of_network === 'true';
       const bd = (node['#nodes'] || []).find((n) => n['#name'] === 'break_duration');
       if (bd && typeof bd.duration === 'number') durationPts = bd.duration;
     } else if (node['#name'] === 'time_signal') {
       const segDesc = (tableObj['#nodes'] || []).find((n) => n['#name'] === 'splice_segmentation_descriptor');
       if (segDesc) {
         eventId = segDesc.segmentation_event_id;
+        isOut = segDesc.segmentation_type_id === 0x22 || segDesc.web_delivery_allowed === false;
         if (typeof segDesc.segmentation_duration === 'number') durationPts = segDesc.segmentation_duration;
       }
     }
   }
   if (eventId === null || !base64Section) return;
 
-  state.pendingTables.set(eventId, {
-    hex: Buffer.from(base64Section, 'base64').toString('hex'),
-    // duration_pts está em unidades de 90kHz, igual PTS.
-    durationMs: durationPts !== null ? Math.round(durationPts / 90) : null,
-  });
-  // Não deixa acumular indefinidamente se algum evento nunca chegar a
-  // handleSpliceEvent (ex: comando cancelado antes do processEvent final).
+  const hex = Buffer.from(base64Section, 'base64').toString('hex');
+  // duration_pts está em unidades de 90kHz, igual PTS.
+  const durationMs = durationPts !== null ? Math.round(durationPts / 90) : null;
+  const expectedType = isOut === null ? null : isOut ? 'out' : 'in';
+
+  const target = state.history.find(
+    (r) => r.eventId === eventId && r.spliceInfoHex === null && (expectedType === null || r.type === expectedType)
+  );
+  if (target) {
+    target.spliceInfoHex = hex;
+    target.durationMs = durationMs;
+    persistHistory(username, state);
+    updateActiveBreak(username, target); // agora com hex/duração -- reflete no manifest HLS
+    return;
+  }
+
+  // Evento ainda não chegou (ordem invertida) -- guarda para handleSpliceEvent consumir.
+  state.pendingTables.set(eventId, { hex, durationMs });
   if (state.pendingTables.size > 20) {
     const oldestKey = state.pendingTables.keys().next().value;
     state.pendingTables.delete(oldestKey);
@@ -184,28 +204,37 @@ const MAX_BREAKS_TRACKED = 20;
 
 // Mantém a lista de breaks (cue-out .. cue-in) usada pelo proxy HLS para
 // decidir em quais segmentos do manifest inserir EXT-X-DATERANGE/CUE-OUT/
-// CUE-IN. Um cue-out abre um break (fim estimado por duração, se conhecida);
-// o cue-in seguinte com o mesmo eventId fecha esse break com o horário real.
+// CUE-IN. Um cue-out abre/atualiza um break (fim estimado por duração, se
+// conhecida); o cue-in seguinte com o mesmo eventId fecha esse break com o
+// horário real. Chamada duas vezes por lado (uma vez no cue em si, sem hex
+// ainda, e de novo quando handleSpliceTable completa o hex/duração) -- por
+// isso atualiza em vez de sempre criar.
 function updateActiveBreak(username, record) {
   const state = getState(username);
   const startAt = new Date(record.receivedAt).getTime();
 
   if (record.type === 'out') {
-    state.breaks.push({
-      eventId: record.eventId,
-      startAt,
-      endAt: record.durationMs ? startAt + record.durationMs : startAt + DEFAULT_BREAK_MS,
-      plannedDurationMs: record.durationMs || null,
-      spliceInfoHexOut: record.spliceInfoHex,
-      spliceInfoHexIn: null,
-      closed: false,
-    });
-    if (state.breaks.length > MAX_BREAKS_TRACKED) state.breaks.shift();
+    let brk = state.breaks.find((b) => b.eventId === record.eventId && !b.closed);
+    if (!brk) {
+      brk = { eventId: record.eventId, closed: false };
+      state.breaks.push(brk);
+      if (state.breaks.length > MAX_BREAKS_TRACKED) state.breaks.shift();
+    }
+    brk.startAt = startAt;
+    brk.plannedDurationMs = record.durationMs || null;
+    brk.endAt = record.durationMs ? startAt + record.durationMs : startAt + DEFAULT_BREAK_MS;
+    brk.spliceInfoHexOut = record.spliceInfoHex;
   } else if (record.type === 'in') {
-    const brk = [...state.breaks].reverse().find((b) => b.eventId === record.eventId && !b.closed);
+    // Não filtra por !closed: a primeira chamada (cue-in sem hex ainda) já
+    // fecha o break: closed=true; a segunda (quando handleSpliceTable
+    // completa o hex) precisa achar esse mesmo break já fechado para
+    // preencher spliceInfoHexIn -- só ignora um break de um eventId antigo
+    // reaberto por engano (nunca deveria haver dois breaks closed com o
+    // mesmo eventId ao mesmo tempo dado o MAX_BREAKS_TRACKED pequeno).
+    const brk = [...state.breaks].reverse().find((b) => b.eventId === record.eventId);
     if (brk) {
       brk.endAt = startAt;
-      brk.spliceInfoHexIn = record.spliceInfoHex;
+      if (record.spliceInfoHex) brk.spliceInfoHexIn = record.spliceInfoHex;
       brk.closed = true;
     }
   }
@@ -243,10 +272,14 @@ function startCueDetector(username) {
 
   const udpSocket = dgram.createSocket('udp4');
   udpSocket.on('message', (msg) => {
+    if (process.env.SCTE_DEBUG_UDP) {
+      console.log(`[${username}] UDP raw (${msg.length}b): ${msg.toString('utf8')}`);
+    }
     let parsed;
     try {
       parsed = JSON.parse(msg.toString('utf8'));
     } catch (e) {
+      if (process.env.SCTE_DEBUG_UDP) console.log(`[${username}] JSON.parse falhou: ${e.message}`);
       return; // datagrama incompleto/fragmentado, ignora
     }
     const items = Array.isArray(parsed) ? parsed : [parsed];

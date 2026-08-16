@@ -491,7 +491,11 @@ function rewriteManifest(text, breaks) {
 
 function proxyHls(req, res) {
   const targetPath = req.url.slice(HLS_PROXY_PREFIX.length - 1); // mantém a barra inicial
-  const isManifest = targetPath.endsWith('.m3u8');
+  // targetPath inclui query string (ex: "...index.m3u8?session=..." -- o
+  // MediaMTX usa isso para cookieCheck/sessão) -- não dá pra usar endsWith
+  // direto, senão nunca bate e o manifest passa como pipe binário sem as
+  // tags SCTE-35.
+  const isManifest = targetPath.split('?')[0].endsWith('.m3u8');
   const proxyReq = http.request(
     {
       host: MEDIAMTX_HOST,

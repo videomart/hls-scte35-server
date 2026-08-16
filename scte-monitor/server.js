@@ -37,7 +37,17 @@ const perClientState = new Map(); // username -> { history, sseClients, tspProc,
 function getState(username) {
   let state = perClientState.get(username);
   if (!state) {
-    state = { history: [], sseClients: new Set(), tspProc: null, udpSocket: null, udpPort: null };
+    state = {
+      history: [],
+      sseClients: new Set(),
+      tspProc: null,
+      udpSocket: null,
+      udpPort: null,
+      pendingTables: new Map(),
+      // Breaks (cue-out/cue-in) usados pelo proxy HLS para anotar o manifest
+      // com EXT-X-DATERANGE/CUE-OUT/CUE-IN -- ver updateActiveBreak/rewriteManifest.
+      breaks: [],
+    };
     perClientState.set(username, state);
     loadHistory(username, state);
   }
@@ -95,13 +105,22 @@ function broadcast(state, event) {
 
 function handleSpliceEvent(username, evt) {
   const state = getState(username);
+  const eventId = evt['event-id'];
+  // A tabela SCTE-35 bruta (com o splice_info_section em base64) chega via
+  // um datagrama JSON separado, tipicamente antes ou junto do evento --
+  // guardamos as últimas por splice_event_id para anexar ao registro do cue
+  // (usado depois para popular EXT-X-DATERANGE SCTE35-OUT/IN no HLS).
+  const pending = state.pendingTables && state.pendingTables.get(eventId);
   const record = {
     receivedAt: new Date().toISOString(),
-    eventId: evt['event-id'],
+    eventId,
     type: evt['event-type'], // "in" ou "out"
     progress: evt['progress'],
     splicePid: evt['splice-pid'],
+    spliceInfoHex: pending ? pending.hex : null,
+    durationMs: pending ? pending.durationMs : null,
   };
+  if (state.pendingTables) state.pendingTables.delete(eventId);
   state.history.unshift(record);
   if (state.history.length > MAX_HISTORY) state.history.length = MAX_HISTORY;
   persistHistory(username, state);
@@ -110,6 +129,86 @@ function handleSpliceEvent(username, evt) {
   console.log(logLine);
   appendLog(logLine);
   broadcast(state, record);
+  updateActiveBreak(username, record);
+}
+
+// Extrai splice_event_id, o base64 do splice_info_section bruto, e a duração
+// (segmentation_duration/break_duration, unidade 90kHz) de um datagrama de
+// tabela SCTE-35 completa (emitido pelo splicemonitor com -a
+// --meta-base64-sections, ao lado dos datagramas de "event").
+function handleSpliceTable(username, tableObj) {
+  const state = getState(username);
+  if (!state.pendingTables) state.pendingTables = new Map();
+
+  const nodes = tableObj['#nodes'] || [];
+  let base64Section = null;
+  let eventId = null;
+  let durationPts = null;
+  for (const node of nodes) {
+    if (node['#name'] === 'metadata') {
+      const section = (node['#nodes'] || []).find((n) => n['#name'] === 'section');
+      if (section && section.base64) base64Section = section.base64;
+    } else if (node['#name'] === 'splice_insert') {
+      eventId = node.splice_event_id;
+      const bd = (node['#nodes'] || []).find((n) => n['#name'] === 'break_duration');
+      if (bd && typeof bd.duration === 'number') durationPts = bd.duration;
+    } else if (node['#name'] === 'time_signal') {
+      const segDesc = (tableObj['#nodes'] || []).find((n) => n['#name'] === 'splice_segmentation_descriptor');
+      if (segDesc) {
+        eventId = segDesc.segmentation_event_id;
+        if (typeof segDesc.segmentation_duration === 'number') durationPts = segDesc.segmentation_duration;
+      }
+    }
+  }
+  if (eventId === null || !base64Section) return;
+
+  state.pendingTables.set(eventId, {
+    hex: Buffer.from(base64Section, 'base64').toString('hex'),
+    // duration_pts está em unidades de 90kHz, igual PTS.
+    durationMs: durationPts !== null ? Math.round(durationPts / 90) : null,
+  });
+  // Não deixa acumular indefinidamente se algum evento nunca chegar a
+  // handleSpliceEvent (ex: comando cancelado antes do processEvent final).
+  if (state.pendingTables.size > 20) {
+    const oldestKey = state.pendingTables.keys().next().value;
+    state.pendingTables.delete(oldestKey);
+  }
+}
+
+// Duração default de um break quando o cue-out não veio com duration_pts
+// (ex: splice_immediate sem break_duration) -- usada só como teto de
+// segurança para não deixar EXT-X-DATERANGE aberto indefinidamente caso o
+// cue-in correspondente nunca chegue.
+const DEFAULT_BREAK_MS = 4 * 60 * 1000;
+const MAX_BREAKS_TRACKED = 20;
+
+// Mantém a lista de breaks (cue-out .. cue-in) usada pelo proxy HLS para
+// decidir em quais segmentos do manifest inserir EXT-X-DATERANGE/CUE-OUT/
+// CUE-IN. Um cue-out abre um break (fim estimado por duração, se conhecida);
+// o cue-in seguinte com o mesmo eventId fecha esse break com o horário real.
+function updateActiveBreak(username, record) {
+  const state = getState(username);
+  const startAt = new Date(record.receivedAt).getTime();
+
+  if (record.type === 'out') {
+    state.breaks.push({
+      eventId: record.eventId,
+      startAt,
+      endAt: record.durationMs ? startAt + record.durationMs : startAt + DEFAULT_BREAK_MS,
+      plannedDurationMs: record.durationMs || null,
+      spliceInfoHexOut: record.spliceInfoHex,
+      spliceInfoHexIn: null,
+      closed: false,
+    });
+    if (state.breaks.length > MAX_BREAKS_TRACKED) state.breaks.shift();
+  } else if (record.type === 'in') {
+    const brk = [...state.breaks].reverse().find((b) => b.eventId === record.eventId && !b.closed);
+    if (brk) {
+      brk.endAt = startAt;
+      brk.spliceInfoHexIn = record.spliceInfoHex;
+      brk.closed = true;
+    }
+  }
 }
 
 // --- Processo tsp por cliente: escuta SRT numa porta dedicada e detecta
@@ -152,7 +251,9 @@ function startCueDetector(username) {
     }
     const items = Array.isArray(parsed) ? parsed : [parsed];
     for (const item of items) {
-      if (item && item['#name'] === 'event') handleSpliceEvent(username, item);
+      if (!item) continue;
+      if (item['#name'] === 'event') handleSpliceEvent(username, item);
+      else if (item['#name'] === 'splice_information_table') handleSpliceTable(username, item);
     }
   });
   udpSocket.on('error', (err) => console.error(`[${username}] Erro no socket UDP:`, err.message));
@@ -163,8 +264,11 @@ function startCueDetector(username) {
   const args = [
     // Input: listener SRT na porta dedicada do cliente -- o TVPlay conecta aqui.
     '-I', 'srt', '--listener', `0.0.0.0:${client.srtPort}`, ...passphraseArgs,
-    // Detecta os cues e emite o JSON via UDP local.
-    '-P', 'splicemonitor', '--json-udp', `127.0.0.1:${udpPort}`,
+    // Detecta os cues e emite o JSON via UDP local. -a + --meta-base64-sections
+    // fazem o plugin também emitir a tabela SCTE-35 bruta (splice_info_section
+    // completo em base64), usada para popular EXT-X-DATERANGE SCTE35-OUT/IN
+    // no manifest HLS (ver handleSpliceTable).
+    '-P', 'splicemonitor', '-a', '--meta-base64-sections', '--json-udp', `127.0.0.1:${udpPort}`,
     // Relay bruto (bytes crus, sem remux) para o MediaMTX -- preserva o PID
     // SCTE-35 no caminho até lá, mesmo que o MediaMTX o descarte ao exibir.
     '-O', 'srt', '--caller', `${MEDIAMTX_HOST}:${MEDIAMTX_SRT_PORT}`, '--streamid', `publish:${username}`, ...passphraseArgs,
@@ -240,8 +344,121 @@ function checkBasicAuth(req, res, user, pass, realm) {
 
 const HLS_PROXY_PREFIX = '/hls-live/';
 
+// Formata um Date no formato de EXT-X-DATERANGE (ISO8601 com milissegundos).
+function isoNoMs(date) {
+  return date.toISOString();
+}
+
+// Reescreve um manifest .m3u8 (mpegts, com EXT-X-PROGRAM-DATE-TIME por
+// segmento) inserindo EXT-X-DATERANGE (SCTE35-OUT/IN em hex, formato mais
+// aceito por SSAI de mercado como MediaTailor/MediaPackage) e, para
+// compatibilidade com players/SSAI legados, EXT-X-CUE-OUT/CUE-OUT-CONT/
+// CUE-IN -- ancorados no segmento cujo PDT é o mais próximo (>=) do início
+// de cada break conhecido.
+//
+// Limitação conhecida e aceita: o corte de segmento em si não muda -- a tag
+// fica anotada no segmento de ~2s mais próximo do timestamp real do cue, não
+// exatamente no frame do splice. Ver rtmp_servidor_api_contract (memória)
+// para o racional dessa escolha.
+function rewriteManifest(text, breaks) {
+  if (!breaks || breaks.length === 0) return text;
+
+  const lines = text.split('\n');
+  const segments = []; // { pdtLineIndex, uriLineIndex, pdt }
+  let pendingPdt = null;
+  let pendingPdtIndex = -1;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith('#EXT-X-PROGRAM-DATE-TIME:')) {
+      pendingPdt = new Date(line.slice('#EXT-X-PROGRAM-DATE-TIME:'.length).trim());
+      pendingPdtIndex = i;
+    } else if (line.startsWith('#EXTINF:') && pendingPdt) {
+      segments.push({ insertBeforeIndex: pendingPdtIndex, pdt: pendingPdt });
+      pendingPdt = null;
+    }
+  }
+  if (segments.length === 0) return text; // sem PDT, não há como ancorar as tags
+
+  const insertions = new Map(); // insertBeforeIndex -> [linhas a inserir antes]
+
+  for (const brk of breaks) {
+    // Só considera breaks cuja janela toca o intervalo coberto pela playlist
+    // atual (segmento mais antigo até o mais novo) -- evita reanotar breaks
+    // já totalmente fora da janela deslizante.
+    const playlistStart = segments[0].pdt.getTime();
+    const playlistEnd = segments[segments.length - 1].pdt.getTime();
+    if (brk.endAt < playlistStart || brk.startAt > playlistEnd + 10000) continue;
+
+    // Segmento de início: o primeiro cujo PDT já alcançou o startAt do break.
+    const startSeg = segments.find((s) => s.pdt.getTime() >= brk.startAt) || segments[segments.length - 1];
+    const startDate = isoNoMs(new Date(brk.startAt));
+    const scte35Out = brk.spliceInfoHexOut ? `0x${brk.spliceInfoHexOut}` : null;
+    const scte35In = brk.spliceInfoHexIn ? `0x${brk.spliceInfoHexIn}` : null;
+    // Duração real só é conhecida quando veio no cue-out (plannedDurationMs)
+    // ou quando o break já foi fechado por um cue-in. Sem isso, não inventa
+    // número -- SSAI de mercado usa PLANNED-DURATION para pré-buscar
+    // anúncios, e um valor errado (o teto interno DEFAULT_BREAK_MS) é pior
+    // que omitir o atributo.
+    const knownDurationMs = brk.closed ? brk.endAt - brk.startAt : brk.plannedDurationMs;
+    const durationSec = knownDurationMs !== null ? Math.round(knownDurationMs / 1000) : null;
+
+    const daterangeAttrs = [`ID="${brk.eventId}"`, `START-DATE="${startDate}"`];
+    if (durationSec !== null) {
+      daterangeAttrs.push(brk.closed ? `DURATION=${durationSec}` : `PLANNED-DURATION=${durationSec}`);
+    }
+    daterangeAttrs.push(`CLASS="com.tvtupi.scte35"`);
+    if (scte35Out) daterangeAttrs.push(`SCTE35-OUT=${scte35Out}`);
+    if (scte35In) daterangeAttrs.push(`SCTE35-IN=${scte35In}`);
+
+    const linesToInsert = [`#EXT-X-DATERANGE:${daterangeAttrs.join(',')}`];
+    linesToInsert.push(durationSec !== null ? `#EXT-X-CUE-OUT:${durationSec}` : '#EXT-X-CUE-OUT');
+
+    const existing = insertions.get(startSeg.insertBeforeIndex) || [];
+    insertions.set(startSeg.insertBeforeIndex, existing.concat(linesToInsert));
+
+    // Segmentos intermediários dentro do break recebem CUE-OUT-CONT (prática
+    // padrão para players/SSAI legados que dependem de anotação contínua,
+    // não só do marcador inicial). Sem duração conhecida, não há como que
+    // calcular o fim do break ainda -- não emite CONT/CUE-IN até o cue-in
+    // real ou uma duração chegar (a próxima carga do manifest resolve isso).
+    if (knownDurationMs === null) continue;
+
+    const endSeg = segments.find((s) => s.pdt.getTime() >= brk.endAt);
+    const startIdx = segments.indexOf(startSeg);
+    const endIdx = endSeg ? segments.indexOf(endSeg) : segments.length;
+    for (let idx = startIdx + 1; idx < endIdx; idx++) {
+      const seg = segments[idx];
+      const elapsedSec = Math.round((seg.pdt.getTime() - brk.startAt) / 1000);
+      const contExisting = insertions.get(seg.insertBeforeIndex) || [];
+      insertions.set(
+        seg.insertBeforeIndex,
+        contExisting.concat([`#EXT-X-CUE-OUT-CONT:${elapsedSec}/${durationSec}`])
+      );
+    }
+
+    // CUE-IN no primeiro segmento cujo PDT alcança o fim do break (só quando
+    // o break já foi fechado por um cue-in real -- senão ainda está em curso).
+    if (brk.closed && endSeg && endSeg !== startSeg) {
+      const endExisting = insertions.get(endSeg.insertBeforeIndex) || [];
+      insertions.set(endSeg.insertBeforeIndex, endExisting.concat(['#EXT-X-CUE-IN']));
+    }
+  }
+
+  if (insertions.size === 0) return text;
+
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const toInsert = insertions.get(i);
+    if (toInsert) out.push(...toInsert);
+    out.push(lines[i]);
+  }
+  return out.join('\n');
+}
+
 function proxyHls(req, res) {
   const targetPath = req.url.slice(HLS_PROXY_PREFIX.length - 1); // mantém a barra inicial
+  const isManifest = targetPath.endsWith('.m3u8');
   const proxyReq = http.request(
     {
       host: MEDIAMTX_HOST,
@@ -258,8 +475,27 @@ function proxyHls(req, res) {
       if (headers.location && headers.location.startsWith('/')) {
         headers.location = HLS_PROXY_PREFIX.slice(0, -1) + headers.location;
       }
-      res.writeHead(proxyRes.statusCode, headers);
-      proxyRes.pipe(res);
+
+      if (!isManifest || proxyRes.statusCode !== 200) {
+        res.writeHead(proxyRes.statusCode, headers);
+        proxyRes.pipe(res);
+        return;
+      }
+
+      // Manifest: buferiza (pequeno, texto) para poder reescrever com as
+      // tags SCTE-35 antes de responder.
+      const chunks = [];
+      proxyRes.on('data', (c) => chunks.push(c));
+      proxyRes.on('end', () => {
+        const original = Buffer.concat(chunks).toString('utf8');
+        const username = targetPath.split('/').filter(Boolean)[0] || '';
+        const state = perClientState.get(username);
+        const rewritten = state ? rewriteManifest(original, state.breaks) : original;
+        const body = Buffer.from(rewritten, 'utf8');
+        headers['content-length'] = body.length;
+        res.writeHead(proxyRes.statusCode, headers);
+        res.end(body);
+      });
     }
   );
   proxyReq.on('error', (err) => {

@@ -111,6 +111,35 @@
             border-radius: 8px;
             min-width: 3ch;
         }
+
+        /* Botão de mute/unmute -- único controle exposto ao usuário. Fica
+           semi-transparente e ganha destaque no hover/toque para não competir
+           visualmente com o conteúdo em uso normal (signage). */
+        #mute-btn {
+            position: fixed;
+            right: 18px;
+            bottom: 18px;
+            z-index: 30;
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(0,0,0,0.5);
+            color: #fff;
+            font-size: 22px;
+            line-height: 1;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0.55;
+            transition: opacity 0.15s ease, background 0.15s ease;
+        }
+        #mute-btn:hover,
+        #mute-btn:focus-visible {
+            opacity: 1;
+            background: rgba(0,0,0,0.75);
+        }
     </style>
 </head>
 <body>
@@ -158,6 +187,8 @@
             <p class="vjs-no-js">Ative o JavaScript para assistir.</p>
         </video>
     </div>
+
+    <button id="mute-btn" title="Ativar/desativar som" aria-label="Ativar/desativar som">🔇</button>
 
     <script>
         // Username vem do path da URL: streaming.tvtupi.com.br/player/<usuario>
@@ -260,6 +291,17 @@
         player.on('waiting', function () {
             startReconnectCycle();
         });
+
+        var muteBtn = document.getElementById('mute-btn');
+        function updateMuteBtn() {
+            muteBtn.textContent = player.muted() ? '🔇' : '🔊';
+        }
+        muteBtn.addEventListener('click', function () {
+            player.muted(!player.muted());
+            if (!player.muted()) player.play().catch(function () {});
+            updateMuteBtn();
+        });
+        updateMuteBtn();
 
         showNoSignal();
         loadSource();

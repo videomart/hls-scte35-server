@@ -5,16 +5,78 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin — Clientes SCTE-35</title>
     <style>
+        html, body { height: 100%; }
         body {
             font-family: Arial, sans-serif;
             background-color: #141414;
             color: white;
             margin: 0;
+            display: flex;
+        }
+        h1 { color: #ffffff; font-size: 22px; margin-top: 0; }
+
+        /* --- Menu lateral: acesso rápido às interfaces por cliente
+           (monitor SCTE-35 e player full-screen), montado a partir da mesma
+           lista de clientes já carregada para a tabela abaixo. --- */
+        .sidebar {
+            width: 260px;
+            flex: 0 0 260px;
+            background: #1a1a1a;
+            border-right: 1px solid #2a2a2a;
+            height: 100vh;
+            position: sticky;
+            top: 0;
+            overflow-y: auto;
+            padding: 20px 0;
+            box-sizing: border-box;
+        }
+        .sidebar-title {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #666;
+            padding: 0 20px;
+            margin-bottom: 10px;
+        }
+        .sidebar-empty {
+            padding: 0 20px;
+            font-size: 13px;
+            color: #666;
+        }
+        .sidebar-client {
+            padding: 10px 20px;
+            border-bottom: 1px solid #232323;
+        }
+        .sidebar-client-name {
+            font-size: 14px;
+            font-weight: bold;
+            color: #eee;
+            margin-bottom: 6px;
+            word-break: break-all;
+        }
+        .sidebar-links {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .sidebar-link {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: #4ee08a;
+            text-decoration: none;
+            padding: 3px 0;
+        }
+        .sidebar-link:hover { text-decoration: underline; }
+        .sidebar-link .ico { width: 14px; text-align: center; opacity: 0.8; }
+
+        .content {
+            flex: 1 1 auto;
+            min-width: 0;
             padding: 32px;
             max-width: 900px;
-            margin: 0 auto;
         }
-        h1 { color: #ffffff; font-size: 22px; }
         .panel {
             background: #1e1e1e;
             border-radius: 8px;
@@ -55,6 +117,12 @@
     </style>
 </head>
 <body>
+    <nav class="sidebar" id="sidebar">
+        <div class="sidebar-title">Interfaces por cliente</div>
+        <div id="sidebarBody"><div class="sidebar-empty">Carregando...</div></div>
+    </nav>
+
+    <div class="content">
     <h1>Admin — Clientes SCTE-35</h1>
 
     <div class="panel">
@@ -87,11 +155,13 @@
             </tbody>
         </table>
     </div>
+    </div>
 
     <script>
         var msgEl = document.getElementById('msg');
         var newClientBox = document.getElementById('newClientBox');
         var clientsBody = document.getElementById('clientsBody');
+        var sidebarBody = document.getElementById('sidebarBody');
 
         function showMsg(text, type) {
             msgEl.className = 'msg ' + type;
@@ -106,10 +176,31 @@
             return '•'.repeat(Math.min(pass.length, 12));
         }
 
+        function renderSidebar(list) {
+            if (list.length === 0) {
+                sidebarBody.innerHTML = '<div class="sidebar-empty">Nenhum cliente cadastrado ainda.</div>';
+                return;
+            }
+            var origin = window.location.origin;
+            sidebarBody.innerHTML = list.map(function (c) {
+                var monitorUrl = origin + '/' + c.username;
+                var playerUrl = origin + '/player/' + c.username;
+                return '<div class="sidebar-client">' +
+                    '<div class="sidebar-client-name">' + c.username + '</div>' +
+                    '<div class="sidebar-links">' +
+                    '<a class="sidebar-link" href="' + monitorUrl + '" target="_blank">' +
+                    '<span class="ico">📊</span>Monitor SCTE-35</a>' +
+                    '<a class="sidebar-link" href="' + playerUrl + '" target="_blank">' +
+                    '<span class="ico">▶</span>Player</a>' +
+                    '</div></div>';
+            }).join('');
+        }
+
         function loadClients() {
             fetch('/admin/api/clients')
                 .then(function (r) { return r.json(); })
                 .then(function (list) {
+                    renderSidebar(list);
                     if (list.length === 0) {
                         clientsBody.innerHTML = '<tr><td colspan="6">Nenhum cliente cadastrado ainda.</td></tr>';
                         return;

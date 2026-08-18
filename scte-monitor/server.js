@@ -696,6 +696,15 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Player full-screen sem tabela de cues: streaming.tvtupi.com.br/player/<usuario>.
+  // Mesmo sem autenticação da página pública normal -- pensado para signage
+  // (TV/monitor dedicado), não navegação manual.
+  const playerMatch = urlPath.match(/^\/player\/([a-z0-9][a-z0-9-]{1,30}[a-z0-9])\/?$/);
+  if (playerMatch && clients.get(playerMatch[1])) {
+    serveFile(PUBLIC_DIR, '/player.html', req, res);
+    return;
+  }
+
   // Página pública por cliente: streaming.tvtupi.com.br/<usuario>. Sem
   // autenticação -- serve como vitrine/demonstração para outros clientes.
   const clientMatch = urlPath.match(/^\/([a-z0-9][a-z0-9-]{1,30}[a-z0-9])\/?$/);

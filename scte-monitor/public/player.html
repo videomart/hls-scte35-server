@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Player — TVPLAY</title>
+
+    <link href="https://vjs.zencdn.net/8.12.0/video-js.css" rel="stylesheet" />
+    <script src="https://vjs.zencdn.net/8.12.0/video.min.js"></script>
+
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            background: #000;
+            overflow: hidden;
+        }
+        #player-wrap {
+            position: fixed;
+            inset: 0;
+            width: 100vw;
+            height: 100vh;
+        }
+        .video-js, #meu-player {
+            width: 100% !important;
+            height: 100% !important;
+        }
+        /* Esconde os controles nativos -- página é só exibição (signage) */
+        .video-js .vjs-control-bar { display: none !important; }
+        .video-js .vjs-big-play-button { display: none !important; }
+        .video-js .vjs-loading-spinner { display: none !important; }
+
+        /* --- Color bars (padrão SMPTE simplificado) exibidas enquanto não há
+           sinal de vídeo -- cobre a tela inteira atrás/abaixo do player. --- */
+        #colorbars {
+            position: fixed;
+            inset: 0;
+            width: 100vw;
+            height: 100vh;
+            display: none;
+            flex-direction: column;
+            z-index: 10;
+        }
+        #colorbars.show { display: flex; }
+        .bars-row {
+            flex: 0 0 75%;
+            display: flex;
+        }
+        .bars-row .bar { flex: 1 1 0; }
+        .bar.white  { background: #c0c0c0; }
+        .bar.yellow { background: #c0c000; }
+        .bar.cyan   { background: #00c0c0; }
+        .bar.green  { background: #00c000; }
+        .bar.magenta{ background: #c000c0; }
+        .bar.red    { background: #c00000; }
+        .bar.blue   { background: #0000c0; }
+        .bars-row2 {
+            flex: 0 0 12.5%;
+            display: flex;
+        }
+        .bars-row2 .bar2 { flex: 1 1 0; }
+        .b2-blue   { background: #0000c0; }
+        .b2-black1 { background: #131313; }
+        .b2-magenta{ background: #c000c0; }
+        .b2-black2 { background: #131313; }
+        .b2-cyan   { background: #00c0c0; }
+        .b2-black3 { background: #131313; }
+        .b2-white  { background: #c0c0c0; }
+        .bars-row3 {
+            flex: 1 1 auto;
+            display: flex;
+        }
+        .b3-navy   { background: #00214c; flex: 1.5 1 0; }
+        .b3-white  { background: #ffffff; flex: 1.5 1 0; }
+        .b3-purple { background: #32006a; flex: 1.5 1 0; }
+        .b3-grey   { background: #131313; flex: 5.5 1 0; }
+        .b3-black  { background: #090909; flex: 1.5 1 0; }
+
+        /* Overlay com o status/contagem regressiva, por cima das barras */
+        #status-overlay {
+            position: fixed;
+            left: 50%;
+            bottom: 6%;
+            transform: translateX(-50%);
+            z-index: 20;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            font-family: Arial, Helvetica, sans-serif;
+            color: #fff;
+            text-shadow: 0 2px 6px rgba(0,0,0,0.8);
+            text-align: center;
+        }
+        #status-overlay.show { display: flex; }
+        #status-title {
+            font-size: clamp(16px, 2.4vw, 28px);
+            font-weight: bold;
+            letter-spacing: 0.03em;
+            background: rgba(0,0,0,0.45);
+            padding: 6px 20px;
+            border-radius: 6px;
+        }
+        #status-countdown {
+            font-size: clamp(28px, 5vw, 56px);
+            font-weight: bold;
+            font-variant-numeric: tabular-nums;
+            background: rgba(0,0,0,0.45);
+            padding: 4px 28px;
+            border-radius: 8px;
+            min-width: 3ch;
+        }
+    </style>
+</head>
+<body>
+    <div id="colorbars">
+        <div class="bars-row">
+            <div class="bar white"></div>
+            <div class="bar yellow"></div>
+            <div class="bar cyan"></div>
+            <div class="bar green"></div>
+            <div class="bar magenta"></div>
+            <div class="bar red"></div>
+            <div class="bar blue"></div>
+        </div>
+        <div class="bars-row2">
+            <div class="bar2 b2-blue"></div>
+            <div class="bar2 b2-black1"></div>
+            <div class="bar2 b2-magenta"></div>
+            <div class="bar2 b2-black2"></div>
+            <div class="bar2 b2-cyan"></div>
+            <div class="bar2 b2-black3"></div>
+            <div class="bar2 b2-white"></div>
+        </div>
+        <div class="bars-row3">
+            <div class="b3-navy"></div>
+            <div class="b3-white"></div>
+            <div class="b3-purple"></div>
+            <div class="b3-grey"></div>
+            <div class="b3-black"></div>
+        </div>
+    </div>
+
+    <div id="status-overlay">
+        <div id="status-title">SEM SINAL — RECONECTANDO</div>
+        <div id="status-countdown">10</div>
+    </div>
+
+    <div id="player-wrap">
+        <video
+            id="meu-player"
+            class="video-js vjs-default-skin"
+            playsinline
+            preload="auto"
+            muted
+            autoplay>
+            <p class="vjs-no-js">Ative o JavaScript para assistir.</p>
+        </video>
+    </div>
+
+    <script>
+        // Username vem do path da URL: streaming.tvtupi.com.br/player/<usuario>
+        var pathParts = window.location.pathname.split('/').filter(Boolean);
+        var username = pathParts[1] || '';
+        var streamUrl = '/hls-live/' + username + '/index.m3u8';
+
+        var RETRY_SECONDS = 10;
+
+        var colorbarsEl = document.getElementById('colorbars');
+        var statusOverlayEl = document.getElementById('status-overlay');
+        var statusTitleEl = document.getElementById('status-title');
+        var countdownEl = document.getElementById('status-countdown');
+
+        var player = videojs('meu-player', {
+            autoplay: true,
+            muted: true,
+            controls: false,
+            fluid: false,
+            liveui: false
+        });
+
+        var countdownTimer = null;
+        var retryTimer = null;
+        var reconnecting = false;
+
+        function stopCountdown() {
+            if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+            if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+        }
+
+        function showNoSignal() {
+            colorbarsEl.classList.add('show');
+            statusOverlayEl.classList.add('show');
+        }
+
+        function hideNoSignal() {
+            colorbarsEl.classList.remove('show');
+            statusOverlayEl.classList.remove('show');
+        }
+
+        // Dispara a barra de cores + contagem regressiva de RETRY_SECONDS e, ao
+        // fim, tenta recarregar a fonte do player. Reentrante: se já estiver
+        // reconectando, não empilha novos timers.
+        function startReconnectCycle() {
+            if (reconnecting) return;
+            reconnecting = true;
+            showNoSignal();
+
+            var remaining = RETRY_SECONDS;
+            countdownEl.textContent = String(remaining);
+            statusTitleEl.textContent = 'SEM SINAL — RECONECTANDO';
+
+            countdownTimer = setInterval(function () {
+                remaining--;
+                if (remaining <= 0) {
+                    clearInterval(countdownTimer);
+                    countdownTimer = null;
+                    return;
+                }
+                countdownEl.textContent = String(remaining);
+            }, 1000);
+
+            retryTimer = setTimeout(function () {
+                reconnecting = false;
+                loadSource();
+            }, RETRY_SECONDS * 1000);
+        }
+
+        function loadSource() {
+            // cache-bust simples pra evitar manifest/segmento antigo cacheado
+            // pelo browser em tentativas sucessivas.
+            player.src({ src: streamUrl + '?t=' + Date.now(), type: 'application/x-mpegURL' });
+            player.load();
+            player.play().catch(function () { /* autoplay pode ser bloqueado até haver interação; ok, o retry continua tentando */ });
+        }
+
+        player.on('loadeddata', function () {
+            stopCountdown();
+            reconnecting = false;
+            hideNoSignal();
+        });
+
+        player.on('playing', function () {
+            stopCountdown();
+            reconnecting = false;
+            hideNoSignal();
+        });
+
+        player.on('error', function () {
+            startReconnectCycle();
+        });
+
+        // waiting/stalled cobrem o caso de conexão que cai no meio do
+        // streaming (não só falha na carga inicial).
+        player.on('stalled', function () {
+            startReconnectCycle();
+        });
+
+        player.on('waiting', function () {
+            startReconnectCycle();
+        });
+
+        showNoSignal();
+        loadSource();
+    </script>
+</body>
+</html>

@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Player RTMP</title>
+
+    <link href="https://vjs.zencdn.net/8.12.0/video-js.css" rel="stylesheet" />
+    <script src="https://vjs.zencdn.net/8.12.0/video.min.js"></script>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #141414;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        h1 {
+            margin-bottom: 20px;
+            font-size: 24px;
+            color: #E50914;
+        }
+        .video-container {
+            width: 100%;
+            max-width: 800px;
+            aspect-ratio: 16 / 9;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.7);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .video-js {
+            width: 100% !important;
+            height: 100% !important;
+        }
+    </style>
+</head>
+<body>
+
+    <h1 id="title">TRANSMISSÃO AO VIVO</h1>
+
+    <div class="video-container">
+        <video
+            id="meu-player"
+            class="video-js vjs-default-skin vjs-big-play-centered"
+            controls
+            preload="auto"
+            muted
+            autoplay>
+            <p class="vjs-no-js">
+                Para assistir a este vídeo, por favor ative o JavaScript ou mude para um navegador que suporte vídeo em HTML5.
+            </p>
+        </video>
+    </div>
+
+    <script>
+        // Streamkey vem do path: rtmp.tvtupi.com.br/rtmp-player/<streamkey> --
+        // o nginx-rtmp gera /hls/<streamkey>.m3u8 automaticamente para
+        // qualquer streamkey publicada em rtmp://.../live/<streamkey>.
+        var pathParts = window.location.pathname.split('/').filter(Boolean);
+        var streamKey = pathParts[1] || 'teste';
+        document.getElementById('title').textContent = 'TRANSMISSÃO AO VIVO — ' + streamKey;
+
+        var streamUrl = window.location.protocol + '//' + window.location.host + '/hls/' + streamKey + '.m3u8';
+        var RETRY_INTERVAL_MS = 5000;
+
+        var player = videojs('meu-player', {
+            autoplay: true,
+            muted: true,
+            controls: true,
+            fluid: true
+        });
+
+        function loadStream() {
+            player.src({
+                src: streamUrl,
+                type: 'application/x-mpegURL'
+            });
+        }
+
+        // Sem transmissão ativa: o .m3u8 não existe ainda (404) ou a rede
+        // falha. Em vez de exigir F5 do usuário, tenta recarregar a fonte
+        // sozinho a cada 5s até a transmissão aparecer.
+        player.on('error', function () {
+            setTimeout(loadStream, RETRY_INTERVAL_MS);
+        });
+
+        loadStream();
+    </script>
+
+</body>
+</html>

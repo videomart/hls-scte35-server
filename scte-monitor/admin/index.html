@@ -59,6 +59,10 @@
             flex-direction: column;
             gap: 4px;
         }
+        .sidebar-links-divider {
+            border-top: 1px dashed #2e2e2e;
+            margin: 4px 0;
+        }
         .sidebar-link {
             display: flex;
             align-items: center;
@@ -176,15 +180,30 @@
             return '•'.repeat(Math.min(pass.length, 12));
         }
 
+        // Domínio do outro pipeline (nginx-rtmp, ingest RTMP legado, serviço
+        // separado do scte-monitor/SRT) -- mesmo host desta página, trocando
+        // só o subdomínio "streaming" por "rtmp" (streaming.tvtupi.com.br ->
+        // rtmp.tvtupi.com.br). Funciona em produção; em dev local sem esse
+        // padrão de subdomínio, o link fica com o host errado (aceitável,
+        // não há RTMP local dedicado por cliente hoje).
+        function rtmpOrigin() {
+            var host = window.location.hostname.replace(/^streaming\./, 'rtmp.');
+            return window.location.protocol + '//' + host;
+        }
+
         function renderSidebar(list) {
             if (list.length === 0) {
                 sidebarBody.innerHTML = '<div class="sidebar-empty">Nenhum cliente cadastrado ainda.</div>';
                 return;
             }
             var origin = window.location.origin;
+            var rtmpBase = rtmpOrigin();
             sidebarBody.innerHTML = list.map(function (c) {
                 var monitorUrl = origin + '/' + c.username;
                 var playerUrl = origin + '/player/' + c.username;
+                var hlsFileUrl = origin + '/hls-live/' + c.username + '/index.m3u8';
+                var rtmpHlsUrl = rtmpBase + '/hls/' + c.username + '.m3u8';
+                var rtmpPlayerUrl = rtmpBase + '/rtmp-player/' + c.username;
                 return '<div class="sidebar-client">' +
                     '<div class="sidebar-client-name">' + c.username + '</div>' +
                     '<div class="sidebar-links">' +
@@ -192,6 +211,13 @@
                     '<span class="ico">📊</span>Monitor SCTE-35</a>' +
                     '<a class="sidebar-link" href="' + playerUrl + '" target="_blank">' +
                     '<span class="ico">▶</span>Player</a>' +
+                    '<a class="sidebar-link" href="' + hlsFileUrl + '" target="_blank">' +
+                    '<span class="ico">📄</span>Arquivo HLS (.m3u8)</a>' +
+                    '<div class="sidebar-links-divider"></div>' +
+                    '<a class="sidebar-link" href="' + rtmpHlsUrl + '" target="_blank">' +
+                    '<span class="ico">📄</span>Streaming RTMP (.m3u8)</a>' +
+                    '<a class="sidebar-link" href="' + rtmpPlayerUrl + '" target="_blank">' +
+                    '<span class="ico">▶</span>Player RTMP</a>' +
                     '</div></div>';
             }).join('');
         }
